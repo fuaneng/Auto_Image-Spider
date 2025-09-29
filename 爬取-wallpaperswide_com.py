@@ -9,11 +9,12 @@ import os
 import time
 import hashlib
 import redis
-import csv
+import pandas as pd
 import threading
 import random
 import re 
 import urllib.parse 
+from urllib.parse import urlparse
 
 class wallpaperswide:
     def __init__(self, chrome_driver_path):
@@ -32,6 +33,10 @@ class wallpaperswide:
         # 设置 User-Agent
         user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         options.add_argument(f'user-agent={user_agent}')
+        # 无头模式（可选）
+        # options.add_argument('--headless')
+        # 固定分辨率窗口，比如 1920x1080
+        options.add_argument('--window-size=1920,1080')
         self.driver = webdriver.Chrome(service=service, options=options)
 
         self.base_url = 'https://wallpaperswide.com/'
@@ -48,110 +53,91 @@ class wallpaperswide:
         self.csv_lock = threading.Lock()
         
         # 定义目标原图的分辨率，用于 URL 替换
-        # 这个分辨率可以根据需要修改，例如 "1920x1080" 或 "2560x1440"
-        self.target_resolution = "2560x1440" 
+        self.target_resolution = "2560x1440" # 可根据需要修改，默认 5K 5120x2880 分辨率，适合大多数高分屏幕，也可改为 "3840x2160" (4K) 或 "2560x1440" (2K)
 
-    def get_images(self, tag, csv_path):
-        """解析当前页面上的图片信息，处理滚动加载并存储 URL 和标题"""
-        print(f"--- 正在解析【{tag}】的图片列表...")
-
-        # 图片的一级容器 CSS 选择器
-        image_card_selector = 'li.wall' 
-        
+    def scroll_and_load_images(self):
+        """滚动页面，加载所有图片元素，返回图片卡片元素列表"""
+        image_card_selector = 'li.wall'
         wait = WebDriverWait(self.driver, 20)
-        
-        # 步骤 1: 等待初始图片容器加载
         try:
-            # 使用 EC.visibility_of_element_located 确保元素在页面上可见
             wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, image_card_selector)))
             print("[√] 图片容器已加载。")
             time.sleep(random.uniform(1.5, 3.0))
         except TimeoutException:
-            # 如果是无结果页面，这里会超时，但我们已经在 main 中处理了重定向，这里只负责解析
             print("[✗] 等待图片容器超时，可能是没有搜索结果或页面加载慢。")
-            return
+            return []
         except Exception as e:
             print(f"[✗] 等待图片容器时发生未知异常: {e}")
-            return
+            return []
 
-        # 步骤 2: 滚动加载所有图片
         last_count = 0
         while True:
             image_elements = self.driver.find_elements(By.CSS_SELECTOR, image_card_selector)
             current_count = len(image_elements)
-            
-            # 停止加载条件：如果当前数量和上次数量一致，且数量大于 0
             if current_count == last_count and current_count > 0:
                 print(f"所有图片 ({current_count} 个) 已加载完毕，准备开始解析。")
                 break
-            # 退出条件：如果两轮都找不到图片
             if current_count == 0 and last_count == 0:
                 print("当前页面没有找到图片元素，跳过。")
                 break
-
-            # 滚动到底部加载更多
             if current_count > 0:
                 last_element = image_elements[-1]
                 self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'end'});", last_element)
-                
                 print(f"滚动到第 {current_count} 个元素，继续加载...")
-            
             last_count = current_count
             time.sleep(random.uniform(2.0, 4.0))
-
         image_elements = self.driver.find_elements(By.CSS_SELECTOR, image_card_selector)
         print(f"找到 {len(image_elements)} 个图片卡片进行解析。")
-        
-        # 步骤 3: 解析图片信息
-        for card_ele in image_elements: 
+        return image_elements
+
+    def parse_and_save_images(self, image_elements, tag, csv_path):
+        """解析图片卡片元素，提取信息并保存"""
+        for card_ele in image_elements:
             try:
-                # 查找包含标题和图片的 <a> 标签
                 a_element = card_ele.find_element(By.CSS_SELECTOR, 'a[itemprop="significantLinks"]')
-                
-                # 在 <a> 标签内部查找 img 元素
                 img_element = a_element.find_element(By.TAG_NAME, 'img')
-                
-                # 从 img 元素的 alt 属性中提取标题 (更准确)
                 title = img_element.get_attribute('alt').split(' 4K UHD Wallpaper')[0].strip()
-                
-                # 从 img 元素的 src 属性中提取 URL
                 image_url = img_element.get_attribute('src')
-                
-                # 清理 URL: 将缩略图 URL 转换为原图 URL
-                # 1. 替换 'thumbs' 为 'download'
                 image_url_cleaned = image_url.replace('/thumbs/', '/download/')
-                
-                # 2. 替换 '-t1.jpg' 为 '-{resolution}.jpg'
                 image_url_cleaned = image_url_cleaned.replace('-t1.jpg', f'-{self.target_resolution}.jpg')
-                
-                
                 if image_url_cleaned and title:
                     md5_hash = hashlib.md5(image_url_cleaned.encode('utf-8')).hexdigest()
                     if not self.redis.sismember(self.redis_key, md5_hash):
                         self.redis.sadd(self.redis_key, md5_hash)
-                        
                         image_name = image_url_cleaned.split('/')[-1]
-                        
                         self.write_to_csv(title, image_name, image_url_cleaned, csv_path, tag)
                     else:
-                        pass # 简化打印，跳过重复图片
-                
+                        pass
             except NoSuchElementException:
                 continue
             except Exception as e:
                 print(f"[✗] 处理图片异常: {e}")
                 continue
 
+    def get_images(self, tag, csv_path):
+        """解析当前页面上的图片信息，处理滚动加载并存储 URL 和标题"""
+        print(f"--- 正在解析【{tag}】的图片列表...")
+        image_elements = self.scroll_and_load_images()
+        if image_elements:
+            self.parse_and_save_images(image_elements, tag, csv_path)
+
     def write_to_csv(self, title, name, url, csv_path, tag):
-        """将图片信息写入 CSV 文件"""
+        """使用 pandas 写入 CSV，支持断点续写和更强的数据处理能力"""
         try:
             with self.csv_lock:
-                with open(csv_path, 'a', newline='', encoding='utf-8-sig') as f:
-                    writer = csv.writer(f)
-                    if f.tell() == 0:
-                        writer.writerow(['Title', 'ImageName', 'URL', "TAG"])
-                    writer.writerow([title, name, url, tag])
-                    f.flush()
+                # 读取已有数据
+                if os.path.exists(csv_path):
+                    df = pd.read_csv(csv_path, encoding='utf-8-sig')
+                else:
+                    df = pd.DataFrame(columns=['Title', 'ImageName', 'URL', 'TAG'])
+                # 新数据
+                new_row = {'Title': title, 'ImageName': name, 'URL': url, 'TAG': tag}
+                # 追加
+                df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+                # 去重
+                df.drop_duplicates(subset=['ImageName', 'URL'], inplace=True)
+                # 保存
+                df.to_csv(csv_path, index=False, encoding='utf-8-sig')
             print(f'[√] 写入成功：{name}')
         except Exception as e:
             print(f'[✗] 写入 CSV 异常：{name} -> {e}')
@@ -184,6 +170,19 @@ class wallpaperswide:
                 # 使用 JavaScript 点击绕过元素遮挡
                 self.driver.execute_script("arguments[0].click();", next_button)
                 
+                # ----------------------------------------------------------
+                # 【最终修复点】翻页后 URL 精确路径检查
+                # 等待 1-2 秒让页面跳转完成
+                time.sleep(random.uniform(1.0, 2.0)) 
+                current_url_raw = self.driver.current_url
+                
+                # 如果 URL 中含有 "/page/"，但没有 "/search/"，则判定为重定向至主页普通分页
+                if '/page/' in current_url_raw and '/search/' not in current_url_raw:
+                    print(f"[跳过/停止] 标签【{tag}】翻页后重定向至普通分页: {current_url_raw}")
+                    return True 
+                
+                # ----------------------------------------------------------
+                
                 current_page_num += 1
                 
                 # 3. 等待下一页图片容器加载稳定
@@ -203,58 +202,46 @@ class wallpaperswide:
                 print(f"[✗] 翻页时发生错误: {e}")
                 return False
 
+    def crawl_tag(self, tag, csv_path):
+        """串行任务：爬取单个标签"""
+        try:
+            encoded_tag = urllib.parse.quote_plus(tag)
+            search_url = f'{self.base_url}search.html?q={encoded_tag}'
+            print(f"\n--- 开始处理标签：【{tag}】 ---")
+            print(f"尝试访问 URL: {search_url}")
+            self.driver.get(search_url)
+            time.sleep(random.uniform(3.0, 5.0))
+            current_url_raw = self.driver.current_url
+            parsed_current = urlparse(current_url_raw)
+            if parsed_current.path != '/search.html':
+                print(f"[跳过] 搜索标签【{tag}】没有结果，初始页面重定向到非搜索路径: {parsed_current.path}")
+                return
+            print(f"[√] 初始页面加载成功，当前 URL: {current_url_raw}")
+            success = self.crawl_page(tag, csv_path)
+            if success:
+                print(f'[完成] 【{tag}】全部页面爬取与去重完毕。\n')
+            else:
+                print(f'[失败] 【{tag}】爬取失败，请检查网络或网站结构。\n')
+        except Exception as e:
+            print(f"[✗] 爬取【{tag}】时发生错误: {e}")
+
     def main(self):
         # --- 配置路径：请修改为你的实际路径 ---
-        save_path_all = r'D:\work\爬虫\爬虫数据\wallpaperswide'
-        tag_file_path = r"D:\work\爬虫\ram_tag_list_备份.txt"
+        save_path_all = r'R:\py\Auto_Image-Spider\爬虫数据\wallpaperswide'
+        tag_file_path = r"R:\py\Auto_Image-Spider\ram_tag_list.txt"
         # -------------------------------------
-        
         os.makedirs(save_path_all, exist_ok=True)
-        
         try:
             with open(tag_file_path, 'r', encoding='utf-8') as f:
                 tags = [line.strip() for line in f if line.strip()]
         except FileNotFoundError:
             print(f"[错误] 标签文件未找到: {tag_file_path}")
             return
-        
         print(f"--- 找到 {len(tags)} 个标签。")
-        
         csv_path = os.path.join(save_path_all, 'all_records.csv')
-        
-        # 预先处理 base_url，确保它没有末尾斜杠
-        base_url_cleaned = self.base_url.rstrip('/')
-        
         for tag in tags:
-            try:
-                encoded_tag = urllib.parse.quote_plus(tag)
-                search_url = f'{self.base_url}search.html?q={encoded_tag}' 
-                
-                print(f"\n--- 开始处理标签：【{tag}】 ---")
-                print(f"尝试访问 URL: {search_url}")
-                
-                self.driver.get(search_url)
-                # 初始页面加载和可能的重定向等待
-                time.sleep(random.uniform(3.0, 5.0)) 
-                
-                # 【关键修复点】检查是否被重定向到主页
-                current_url = self.driver.current_url.rstrip('/')
-                
-                if current_url == base_url_cleaned:
-                    print(f"[跳过] 搜索标签【{tag}】没有结果，URL 重定向到主页。")
-                    continue # 跳过当前标签，进入下一个
-                
-                print(f"[√] 页面加载成功，当前 URL: {current_url}")
-                
-                success = self.crawl_page(tag, csv_path)
-                
-                if success:
-                    print(f'[完成] 【{tag}】全部页面爬取与去重完毕。\n')
-                else:
-                    print(f'[失败] 【{tag}】爬取失败，请检查网络或网站结构。\n')
-            except Exception as e:
-                print(f"[✗] 爬取【{tag}】时发生错误: {e}")
-
+            self.crawl_tag(tag, csv_path)
+            time.sleep(random.uniform(0.5, 1.5)) # 控制访问速度，防止被封
         self.driver.quit()
 
 if __name__ == '__main__':
