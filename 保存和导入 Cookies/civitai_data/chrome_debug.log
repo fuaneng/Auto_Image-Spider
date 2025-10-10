@@ -1,0 +1,32 @@
+[1408:1128:1010/225924.822:INFO:components\enterprise\browser\controller\chrome_browser_cloud_management_controller.cc:206] No machine level policy manager exists.
+[5960:17516:1010/225928.477:ERROR:net\socket\ssl_client_socket_impl.cc:915] handshake failed; returned -1, SSL error code 1, net_error -100
+[5960:17516:1010/225928.478:ERROR:net\socket\ssl_client_socket_impl.cc:915] handshake failed; returned -1, SSL error code 1, net_error -100
+[1408:1128:1010/225928.504:INFO:CONSOLE:0] "Uncaught (in promise) Failed to load script: //securepubads.g.doubleclick.net/tag/js/gpt.js?network-code=22152718", source: https://civitai.com/images?tags=5211 (0)
+[1408:1128:1010/225928.507:INFO:CONSOLE:1] "%c【AdEngine】(production-47) queued at 2169ms and loaded in 1097ms. (civitai.com:16516-1759840911131-default) color:#2dc9ac;", source: https://adengine.snigelweb.com/civitai.com/16516-1759840911131/adngin.js (1)
+[5960:17516:1010/225931.069:ERROR:net\socket\ssl_client_socket_impl.cc:915] handshake failed; returned -1, SSL error code 1, net_error -100
+[1408:2964:1010/225931.465:ERROR:google_apis\gcm\engine\registration_request.cc:291] Registration response error message: DEPRECATED_ENDPOINT
+[5960:17516:1010/225931.823:ERROR:net\socket\ssl_client_socket_impl.cc:915] handshake failed; returned -1, SSL error code 1, net_error -100
+[1408:2964:1010/225931.823:ERROR:google_apis\gcm\engine\connection_factory_impl.cc:434] Failed to connect to MCS endpoint with error -100
+[1408:2964:1010/225958.410:ERROR:google_apis\gcm\engine\registration_request.cc:291] Registration response error message: QUOTA_EXCEEDED
+[5960:17516:1010/230042.762:ERROR:net\socket\ssl_client_socket_impl.cc:915] handshake failed; returned -1, SSL error code 1, net_error -100
+[5960:17516:1010/230042.763:ERROR:net\socket\ssl_client_socket_impl.cc:915] handshake failed; returned -1, SSL error code 1, net_error -100
+[1408:1128:1010/230043.025:INFO:CONSOLE:1] "%c【AdEngine】(production-47) queued at 1504ms and loaded in 0ms. (civitai.com:16516-1759840911131-default) color:#2dc9ac;", source: https://adengine.snigelweb.com/civitai.com/16516-1759840911131/adngin.js (1)
+[1408:1128:1010/230043.038:INFO:CONSOLE:0] "Uncaught (in promise) Failed to load script: //securepubads.g.doubleclick.net/tag/js/gpt.js?network-code=22152718", source: https://civitai.com/images?tags=172 (0)
+[1408:2964:1010/230046.225:ERROR:google_apis\gcm\engine\connection_factory_impl.cc:483] ConnectionHandler failed with net error: -2
+[5960:17516:1010/230046.932:ERROR:net\socket\ssl_client_socket_impl.cc:915] handshake failed; returned -1, SSL error code 1, net_error -100
+[5960:17516:1010/230047.687:ERROR:net\socket\ssl_client_socket_impl.cc:915] handshake failed; returned -1, SSL error code 1, net_error -100
+[1408:2964:1010/230047.688:ERROR:google_apis\gcm\engine\connection_factory_impl.cc:434] Failed to connect to MCS endpoint with error -100
+[5960:17516:1010/230130.163:ERROR:net\socket\ssl_client_socket_impl.cc:915] handshake failed; returned -1, SSL error code 1, net_error -100
+[5960:17516:1010/230130.164:ERROR:net\socket\ssl_client_socket_impl.cc:915] handshake failed; returned -1, SSL error code 1, net_error -100
+[1408:1128:1010/230130.391:INFO:CONSOLE:1] "%c【AdEngine】(production-47) queued at 870ms and loaded in 0ms. (civitai.com:16516-1759840911131-default) color:#2dc9ac;", source: https://adengine.snigelweb.com/civitai.com/16516-1759840911131/adngin.js (1)
+[1408:1128:1010/230130.405:INFO:CONSOLE:0] "Uncaught (in promise) Failed to load script: //securepubads.g.doubleclick.net/tag/js/gpt.js?network-code=22152718", source: https://civitai.com/images?tags=3060 (0)
+[1408:2964:1010/230206.822:ERROR:google_apis\gcm\engine\connection_factory_impl.cc:483] ConnectionHandler failed with net error: -2
+[5960:17516:1010/230207.681:ERROR:net\socket\ssl_client_socket_impl.cc:915] handshake failed; returned -1, SSL error code 1, net_error -100
+[5960:17516:1010/230208.709:ERROR:net\socket\ssl_client_socket_impl.cc:915] handshake failed; returned -1, SSL error code 1, net_error -100
+[1408:2964:1010/230208.709:ERROR:google_apis\gcm\engine\connection_factory_impl.cc:434] Failed to connect to MCS endpoint with error -100
+[1408:1128:1010/230224.964:INFO:CONSOLE:1] "%c【AdEngine】(production-47) queued at 1213ms and loaded in 0ms. (civitai.com:16516-1759840911131-default) color:#2dc9ac;", source: https://adengine.snigelweb.com/civitai.com/16516-1759840911131/adngin.js (1)
+[5960:17516:1010/230225.392:ERROR:net\socket\ssl_client_socket_impl.cc:915] handshake failed; returned -1, SSL error code 1, net_error -100
+[5960:17516:1010/230225.392:ERROR:net\socket\ssl_client_socket_impl.cc:915] handshake failed; returned -1, SSL error code 1, net_error -100
+[1408:1128:1010/230225.393:INFO:CONSOLE:0] "Uncaught (in promise) Failed to load script: //securepubads.g.doubleclick.net/tag/js/gpt.js?network-code=22152718", source: https://civitai.com/images?tags=213 (0)
+[1408:1128:1010/230230.550:INFO:CONSOLE:0] "Access to fetch at 'https://github.com/civitai/civitai/wiki/REST-API-Reference' (redirected from 'https://civitai.com/_next/data/ddIrJX7C2vYlUs8j4xnQu/en/github/wiki/REST-API-Reference.json') from origin 'https://civitai.com' has been blocked by CORS policy: Response to preflight request doesn't pass access control check: No 'Access-Control-Allow-Origin' header is present on the requested resource.", source: https://civitai.com/images?tags=213 (0)
+[1408:1128:1010/230231.641:INFO:CONSOLE:0] "Access to fetch at 'https://education.civitai.com/' (redirected from 'https://civitai.com/_next/data/ddIrJX7C2vYlUs8j4xnQu/en/education.json') from origin 'https://civitai.com' has been blocked by CORS policy: Response to preflight request doesn't pass access control check: No 'Access-Control-Allow-Origin' header is present on the requested resource.", source: https://civitai.com/images?tags=213 (0)

@@ -311,3 +311,9 @@ if __name__ == '__main__':
         nylon(CHROME_DRIVER_PATH).main()
     except (WebDriverException, RedisConnectionError):
         print("\n[程序退出] 请先解决上述致命错误（如 ChromeDriver 或 Redis）后再重试。")
+
+https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/1b60b9e7-5da9-4458-8c83-eb22be515f60/anim=false,width=450,optimized=true/99690108.jpeg
+https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/1b60b9e7-5da9-4458-8c83-eb22be515f60/original=true,quality=90/NKFDHRCJ7S9YXGB9847FTKBKH0.jpeg?sig=CfDJ8J868rbHQQlNuTOL2qbAsuQGtzVUZw-Iw8gGfMl3HicnTgVMqVKdnrXB1k7MfGndIKZqYBfUVl7KnkeLolYS-bx69uc0EBhE6jRMIhMslBXoHAzZrjZB6HHsFAi4ZNl2QxzAP4Z4WQ7qgsXN5l8FeoFLRFZRLFwINUrh4Ojv0P7iXYMOGUU_j6dORwI2yqji38L4myDrUBE7eQDGqcuispRb147LCb2vaNeRAwmP_laPrftaznUGb6NO7B0aWR-fVh4QPO6Vpq4DcGtaQkqx6UhgN1-gV3R4rKWj27yQm6-1&exp=2026-09-11T12:27:17.jpeg
+https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/219f6373-c284-4519-920e-9e113c5cde71/anim=false,width=450,optimized=true/101749354.jpeg
+https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/219f6373-c284-4519-920e-9e113c5cde71/original=true,quality=90/N29Y0ACM6NR2TQKYZYNG75N8B0.jpeg
+<a class="mantine-focus-auto m_849cf0da absolute inset-0 m_b6d8b162 mantine-Text-root mantine-Anchor-root" data-variant="text" data-underline="hover" href="/images/101749354"><img class="EdgeImage_image__iH4_q Cards_image__d4f6b" src="https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/219f6373-c284-4519-920e-9e113c5cde71/anim=false,width=450,optimized=true/101749354.jpeg" placeholder="empty" loading="lazy" style="max-width: 450px;"></a>
