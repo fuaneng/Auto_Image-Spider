@@ -287,7 +287,7 @@ class CivitaiSpider:
         save_path_all = TAG_TXT_DIR
         os.makedirs(save_path_all, exist_ok=True)
         csv_path = os.path.join(save_path_all, 'all_records_civitai.csv')
-        tag_file_path = os.path.join(save_path_all, "tag.txt")
+        tag_file_path = os.path.join(save_path_all, r"R:\py\Auto_Image-Spider\保存和导入 Cookies\civitai\tag1.txt")
 
         # 读取 tag 列表
         try:

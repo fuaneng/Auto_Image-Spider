@@ -1,0 +1,285 @@
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.chrome.options import Options
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
+import os, time, hashlib, redis, csv, threading, random, re, urllib.parse, requests
+from datetime import datetime, timedelta
+
+
+class yande_re:
+    def __init__(self, chrome_driver_path, use_headless=True, redis_host='localhost', redis_port=6379):
+        service = Service(executable_path=chrome_driver_path)
+        options = Options()
+        options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        options.add_experimental_option('useAutomationExtension', False)
+        options.add_argument(
+            'user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        )
+        if use_headless:
+            options.add_argument('--headless=new')
+        options.add_argument("--window-size=1920,1080")
+
+        self.driver = webdriver.Chrome(service=service, options=options)
+        self.base_url = 'https://yande.re/'
+        self.csv_lock = threading.Lock()
+        self.redis_key = 'image_md5_set_yande.re'
+        self.image_save_dir = '' # <--- 新增：初始化图片保存目录的根路径
+
+        # 页面容器选择器
+        self.main_container_selector = 'div#post-list-posts li[id^="p"], div#content li[id^="p"]'
+
+        # Redis 连接
+        try:
+            self.redis = redis.Redis(host=redis_host, port=redis_port, db=0, decode_responses=True)
+            self.redis.ping()
+            print("✅ Redis 连接成功。")
+        except Exception:
+            print("⚠️ Redis 不可用，将使用内存去重。")
+            self.redis = None
+            self.visited_md5 = set()
+
+    # <--- 新增：专门用于下载图片的函数 --->
+    def download_image(self, image_url, save_path):
+        """
+        根据给定的 URL 下载图片并保存到指定路径。
+        :param image_url: 图片的下载地址。
+        :param save_path: 包含文件名和扩展名的完整本地保存路径。
+        """
+        try:
+            # 确保保存图片的文件夹存在
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+
+            # 检查文件是否已存在，如果存在则跳过下载
+            if os.path.exists(save_path):
+                print(f"🟡 [跳过下载] 文件已存在: {os.path.basename(save_path)}")
+                return
+
+            print(f"📥 正在下载: {image_url}")
+            # 使用 requests.get 下载图片，设置 stream=True 以便处理大文件
+            response = requests.get(image_url, stream=True, timeout=30)
+            response.raise_for_status()  # 如果请求失败 (例如 404), 则会抛出异常
+
+            # 以二进制写入模式打开文件并保存
+            with open(save_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            
+            print(f"✅ 下载成功: {os.path.basename(save_path)}")
+
+        except requests.exceptions.RequestException as e:
+            print(f"❌ [下载失败] 网络请求错误: {e} | URL: {image_url}")
+        except Exception as e:
+            print(f"❌ [下载失败] 未知错误: {e} | 保存路径: {save_path}")
+
+    # 🧠 原图检测逻辑
+    def get_hq_image_url(self, lowres_url):
+        """尝试将 jpeg/jpg 替换为 image/png 并验证更大原图是否存在"""
+        try:
+            if "/jpeg/" in lowres_url or lowres_url.endswith(".jpg"):
+                hq_url = lowres_url.replace("/jpeg/", "/image/").rsplit(".", 1)[0] + ".png"
+                resp = requests.head(hq_url, timeout=10)   # 增加超时时间，防止网络问题
+                if resp.status_code == 200:
+                    print(f"🟢 检测到更高清原图: {hq_url}")
+                    return hq_url
+                else:
+                    print(f"⚪ 无高清原图: {hq_url} [{resp.status_code}]")
+        except Exception as e:
+            print(f"⚠️ 原图检测异常: {e}, 通常因为网络问题。")
+        return lowres_url
+
+    # 🧩 将 tag 转换为 “2024年12月30日 - 2025年1月5日（2025年第1周）” 形式
+    def parse_tag_to_week_label(self, tag: str) -> str:
+        try:
+            match = re.search(r'day=(\d+)&month=(\d+)&year=(\d+)', tag)
+            if not match:
+                return tag  # 不是日期型的 tag，直接返回原样
+
+            day, month, year = map(int, match.groups())
+            start_date = datetime(year, month, day)
+            end_date = start_date + timedelta(days=6)
+            iso_year, iso_week, _ = end_date.isocalendar()
+            week_label = (
+                f"{start_date.year}年{start_date.month}月{start_date.day}日 - "
+                f"{end_date.year}年{end_date.month}月{end_date.day}日（{iso_year}年第{iso_week}周）"
+            )
+            return week_label
+        except Exception as e:
+            print(f"⚠️ tag 转换失败: {e} | 原始: {tag}")
+            return tag
+
+    # ---------------------- 主逻辑 ----------------------
+    def get_images(self, tag, csv_path):
+        print(f"--- 正在解析【{tag}】的图片列表...")
+
+        wait = WebDriverWait(self.driver, 30)
+        try:
+            wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, self.main_container_selector)))
+            print("[√] 主图片容器加载完成。")
+        except TimeoutException:
+            print("[✗] 页面加载超时，找不到主图片容器。")
+            return
+
+        post_containers = self.driver.find_elements(By.CSS_SELECTOR, self.main_container_selector)
+        print(f"🖼️ 共检测到 {len(post_containers)} 个图片容器。")
+
+        successful_writes = 0
+        for idx, card_ele in enumerate(post_containers):
+            try:
+                # 查找原图链接
+                try:
+                    img_ele = card_ele.find_element(By.CSS_SELECTOR, 'a.directlink.largeimg')
+                except NoSuchElementException:
+                    try:
+                        img_ele = card_ele.find_element(By.CSS_SELECTOR, 'a[href*="files.yande.re"]')
+                    except NoSuchElementException:
+                        print(f"[跳过] 容器序号 {idx}：未找到原图链接。")
+                        continue
+
+                image_url = img_ele.get_attribute('href') or ''
+                if not image_url:
+                    continue
+
+                # 尝试更高清版本
+                image_url = self.get_hq_image_url(image_url)
+
+                # 提取标题
+                try:
+                    title_ele = card_ele.find_element(By.CSS_SELECTOR, 'a.thumb img.preview')
+                    title = title_ele.get_attribute('title').strip()
+                except NoSuchElementException:
+                    title = "N/A"
+
+                # --- 拆分标题 ---
+                rating, score, tags_text, user = self.parse_title_info(title)
+
+                # 去重
+                md5_hash = hashlib.md5(image_url.encode('utf-8')).hexdigest()
+                if self.is_duplicate(md5_hash):
+                    print(f"🔵 [跳过] 图片已存在于记录中: {image_url}") # <--- 修改：增加去重提示
+                    continue
+
+                # 转换 tag -> 周期标签
+                week_label = self.parse_tag_to_week_label(tag)
+
+                # 准备文件名和写入CSV
+                image_name = os.path.basename(urllib.parse.urlparse(image_url).path)
+                self.write_to_csv(rating, score, tags_text, user, image_name, image_url, csv_path, week_label)
+                print(f"✔️ 写入CSV成功：{image_name}")
+                successful_writes += 1
+                
+                # <--- 新增：调用下载功能 --->
+                # 1. 创建一个符合文件夹命名规则的周标签（替换掉非法字符）
+                safe_week_folder_name = re.sub(r'[\\/*?:"<>|]', '_', week_label)
+                # 2. 拼接完整的保存路径
+                full_save_path = os.path.join(self.image_save_dir, safe_week_folder_name, image_name)
+                # 3. 执行下载
+                self.download_image(image_url, full_save_path)
+
+            except Exception as e:
+                print(f"[✗] 提取失败 idx={idx}: {e}")
+
+        print(f"✅ 【{tag}】成功写入 {successful_writes} 条记录到CSV。")
+
+    def parse_title_info(self, title_text):
+        rating, score, tags, user = "N/A", "N/A", "N/A", "N/A"
+        try:
+            match = re.search(
+                r'Rating:\s*([A-Za-z]+)\s+Score:\s*(\d+)\s+Tags:\s*(.*?)\s+User:\s*(\S+)',
+                title_text
+            )
+            if match:
+                rating = match.group(1).strip()
+                score = match.group(2).strip()
+                tags = match.group(3).strip()
+                user = match.group(4).strip()
+        except Exception as e:
+            print(f"[⚠️] 标题解析失败: {e} | 原始: {title_text}")
+        return rating, score, tags, user
+
+    def is_duplicate(self, md5_hash):
+        if hasattr(self, 'redis') and self.redis:
+            try:
+                if self.redis.sismember(self.redis_key, md5_hash):
+                    return True
+                self.redis.sadd(self.redis_key, md5_hash)
+            except Exception:
+                if not hasattr(self, 'visited_md5'):
+                    self.visited_md5 = set()
+                if md5_hash in self.visited_md5:
+                    return True
+                self.visited_md5.add(md5_hash)
+        else:
+            if not hasattr(self, 'visited_md5'):
+                self.visited_md5 = set()
+            if md5_hash in self.visited_md5:
+                return True
+            self.visited_md5.add(md5_hash)
+        return False
+
+    def write_to_csv(self, rating, score, tags, user, name, url, csv_path, tag_label):
+        try:
+            with self.csv_lock:
+                is_file_empty = not os.path.exists(csv_path) or os.stat(csv_path).st_size == 0
+                os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+                with open(csv_path, 'a', newline='', encoding='utf-8-sig') as f:
+                    writer = csv.writer(f)
+                    if is_file_empty:
+                        writer.writerow(['Rating', 'Score', 'Tags', 'User', 'ImageName', 'URL', 'WeekLabel'])
+                    writer.writerow([rating, score, tags, user, name, url, tag_label])
+        except Exception as e:
+            print(f"[✗] 写入 CSV 出错: {e}")
+
+    def main(self, save_dir, tag_file_path, csv_name='all_records_yande_re_v4.csv'):
+        os.makedirs(save_dir, exist_ok=True)
+        csv_path = os.path.join(save_dir, csv_name)
+
+        # <--- 新增：设置并创建图片保存的主目录 --->
+        self.image_save_dir = os.path.join(save_dir, 'images')
+        os.makedirs(self.image_save_dir, exist_ok=True)
+        print(f"ℹ️ 图片将保存到: {self.image_save_dir}")
+
+        try:
+            with open(tag_file_path, 'r', encoding='utf-8') as f:
+                tags = [line.strip() for line in f if line.strip()]
+        except FileNotFoundError:
+            print(f"[错误] 未找到标签文件: {tag_file_path}")
+            return
+
+        print(f"--- 发现 {len(tags)} 个标签 ---")
+
+        for tag in tags:
+            try:
+                search_url = f"{self.base_url}{tag}"
+                print(f"\n📄 开始处理：【{tag}】\nURL: {search_url}")
+                self.driver.get(search_url)
+                time.sleep(random.uniform(2.5, 4.0))
+                self.get_images(tag, csv_path)
+            except Exception as e:
+                print(f"[✗] 处理标签 {tag} 出错: {e}")
+
+    def quit(self):
+        try:
+            if self.driver:
+                self.driver.quit()
+        except Exception as e:
+            print(f"关闭浏览器出错: {e}")
+
+
+if __name__ == '__main__':
+    chrome_driver_path = r'C:\Program Files\Google\chromedriver-win64\chromedriver.exe'
+    save_dir = r'R:\py\Auto_Image-Spider\yande.re\output_v4'
+    tag_file_path = r'R:\py\Auto_Image-Spider\yande.re\ram_tag_周.txt'
+
+    spider = None
+    try:
+        spider = yande_re(chrome_driver_path, use_headless=True)
+        spider.main(save_dir=save_dir, tag_file_path=tag_file_path)
+    except Exception as main_e:
+        print(f"主程序运行出错: {main_e}")
+    finally:
+        if spider:
+            print("\n正在关闭浏览器...")
+            spider.quit()
