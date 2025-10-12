@@ -1,6 +1,10 @@
 # ![项目地址](https://github.com/fuaneng/Auto_Image-Spider)
+[![Python](https://img.shields.io/badge/Python-3.6%2B-blue.svg)](https://www.python.org/)
+[![Selenium](https://img.shields.io/badge/Selenium-4.0%2B-green.svg)](https://www.selenium.dev/)
+[![Redis](https://img.shields.io/badge/Redis-3.0%2B-red.svg)](https://redis.io/)
+[![License: MIT, yellow badge with text License MIT, featuring a scale icon](https://img.shields.io/badge/License-MIT-yellow.svg?logo=scale)](https://opensource.org/licenses/MIT)
 
-# yande.re 图片爬虫 (yande_re_spider_v4)
+# yande.re 图片爬虫 (run_spider_yande_v1.py)
 
 本项目是一个基于 Python 和 Selenium 的高级网络爬虫，专为抓取 `yande.re` 网站图片而设计。它利用多线程并行处理多个标签页面的解析和图片下载任务，并集成了 **Redis 或内存去重**、**断点续传**、**原图检测** 等功能，以实现高效、稳定的数据采集。
 
@@ -95,7 +99,7 @@ if __name__ == '__main__':
 ### 2\. 运行爬虫
 
 ```bash
-python your_script_name.py
+python run_spider_yande_v1.py
 ```
 
 ## 📂 输出结构
