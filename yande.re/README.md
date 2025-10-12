@@ -1,6 +1,4 @@
-[项目地址]([https://github.com/ffcu/Auto_Image-Spider/tree/main/yande.re](https://github.com/fuaneng/Auto_Image-Spider))
-
-![yande.re 图片爬虫图标](yande_re_spider_v4.png)
+# ![项目地址](https://github.com/fuaneng/Auto_Image-Spider)
 
 # yande.re 图片爬虫 (yande_re_spider_v4)
 
