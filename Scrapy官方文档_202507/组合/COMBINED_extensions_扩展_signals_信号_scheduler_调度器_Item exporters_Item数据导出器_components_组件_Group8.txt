@@ -1,0 +1,1716 @@
+.. _topics-extensions:
+
+==========
+Extensions
+==========
+
+Extensions are :ref:`components <topics-components>` that allow inserting your
+own custom functionality into Scrapy.
+
+Unlike other components, extensions do not have a specific role in Scrapy. They
+are “wildcard” components that can be used for anything that does not fit the
+role of any other type of component.
+
+Loading and activating extensions
+=================================
+
+Extensions are loaded at startup by creating a single instance of the extension
+class per spider being run.
+
+To enable an extension, add it to the :setting:`EXTENSIONS` setting. For
+example:
+
+.. code-block:: python
+
+    EXTENSIONS = {
+        "scrapy.extensions.corestats.CoreStats": 500,
+        "scrapy.extensions.telnet.TelnetConsole": 500,
+    }
+
+:setting:`EXTENSIONS` is merged with :setting:`EXTENSIONS_BASE` (not meant to
+be overridden), and the priorities in the resulting value determine the
+*loading* order.
+
+As extensions typically do not depend on each other, their loading order is
+irrelevant in most cases. This is why the :setting:`EXTENSIONS_BASE` setting
+defines all extensions with the same order (``0``). However, you may need to
+carefully use priorities if you add an extension that depends on other
+extensions being already loaded.
+
+Writing your own extension
+==========================
+
+Each extension is a :ref:`component <topics-components>`.
+
+Typically, extensions connect to :ref:`signals <topics-signals>` and perform
+tasks triggered by them.
+
+Sample extension
+----------------
+
+Here we will implement a simple extension to illustrate the concepts described
+in the previous section. This extension will log a message every time:
+
+* a spider is opened
+* a spider is closed
+* a specific number of items are scraped
+
+The extension will be enabled through the ``MYEXT_ENABLED`` setting and the
+number of items will be specified through the ``MYEXT_ITEMCOUNT`` setting.
+
+Here is the code of such extension:
+
+.. code-block:: python
+
+    import logging
+    from scrapy import signals
+    from scrapy.exceptions import NotConfigured
+
+    logger = logging.getLogger(__name__)
+
+
+    class SpiderOpenCloseLogging:
+        def __init__(self, item_count):
+            self.item_count = item_count
+            self.items_scraped = 0
+
+        @classmethod
+        def from_crawler(cls, crawler):
+            # first check if the extension should be enabled and raise
+            # NotConfigured otherwise
+            if not crawler.settings.getbool("MYEXT_ENABLED"):
+                raise NotConfigured
+
+            # get the number of items from settings
+            item_count = crawler.settings.getint("MYEXT_ITEMCOUNT", 1000)
+
+            # instantiate the extension object
+            ext = cls(item_count)
+
+            # connect the extension object to signals
+            crawler.signals.connect(ext.spider_opened, signal=signals.spider_opened)
+            crawler.signals.connect(ext.spider_closed, signal=signals.spider_closed)
+            crawler.signals.connect(ext.item_scraped, signal=signals.item_scraped)
+
+            # return the extension object
+            return ext
+
+        def spider_opened(self, spider):
+            logger.info("opened spider %s", spider.name)
+
+        def spider_closed(self, spider):
+            logger.info("closed spider %s", spider.name)
+
+        def item_scraped(self, item, spider):
+            self.items_scraped += 1
+            if self.items_scraped % self.item_count == 0:
+                logger.info("scraped %d items", self.items_scraped)
+
+
+.. _topics-extensions-ref:
+
+Built-in extensions reference
+=============================
+
+General purpose extensions
+--------------------------
+
+Log Stats extension
+~~~~~~~~~~~~~~~~~~~
+
+.. module:: scrapy.extensions.logstats
+   :synopsis: Basic stats logging
+
+.. class:: LogStats
+
+Log basic stats like crawled pages and scraped items.
+
+Core Stats extension
+~~~~~~~~~~~~~~~~~~~~
+
+.. module:: scrapy.extensions.corestats
+   :synopsis: Core stats collection
+
+.. class:: CoreStats
+
+Enable the collection of core statistics, provided the stats collection is
+enabled (see :ref:`topics-stats`).
+
+.. _topics-extensions-ref-telnetconsole:
+
+Telnet console extension
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. module:: scrapy.extensions.telnet
+   :synopsis: Telnet console
+
+.. class:: TelnetConsole
+
+Provides a telnet console for getting into a Python interpreter inside the
+currently running Scrapy process, which can be very useful for debugging.
+
+The telnet console must be enabled by the :setting:`TELNETCONSOLE_ENABLED`
+setting, and the server will listen in the port specified in
+:setting:`TELNETCONSOLE_PORT`.
+
+.. _topics-extensions-ref-memusage:
+
+Memory usage extension
+~~~~~~~~~~~~~~~~~~~~~~
+
+.. module:: scrapy.extensions.memusage
+   :synopsis: Memory usage extension
+
+.. class:: MemoryUsage
+
+.. note:: This extension does not work in Windows.
+
+Monitors the memory used by the Scrapy process that runs the spider and:
+
+1. sends a notification e-mail when it exceeds a certain value
+2. closes the spider when it exceeds a certain value
+
+The notification e-mails can be triggered when a certain warning value is
+reached (:setting:`MEMUSAGE_WARNING_MB`) and when the maximum value is reached
+(:setting:`MEMUSAGE_LIMIT_MB`) which will also cause the spider to be closed
+and the Scrapy process to be terminated.
+
+This extension is enabled by the :setting:`MEMUSAGE_ENABLED` setting and
+can be configured with the following settings:
+
+* :setting:`MEMUSAGE_LIMIT_MB`
+* :setting:`MEMUSAGE_WARNING_MB`
+* :setting:`MEMUSAGE_NOTIFY_MAIL`
+* :setting:`MEMUSAGE_CHECK_INTERVAL_SECONDS`
+
+Memory debugger extension
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. module:: scrapy.extensions.memdebug
+   :synopsis: Memory debugger extension
+
+.. class:: MemoryDebugger
+
+An extension for debugging memory usage. It collects information about:
+
+* objects uncollected by the Python garbage collector
+* objects left alive that shouldn't. For more info, see :ref:`topics-leaks-trackrefs`
+
+To enable this extension, turn on the :setting:`MEMDEBUG_ENABLED` setting. The
+info will be stored in the stats.
+
+.. _topics-extensions-ref-spiderstate:
+
+Spider state extension
+~~~~~~~~~~~~~~~~~~~~~~
+
+.. module:: scrapy.extensions.spiderstate
+   :synopsis: Spider state extension
+
+.. class:: SpiderState
+
+Manages spider state data by loading it before a crawl and saving it after.
+
+Give a value to the :setting:`JOBDIR` setting to enable this extension.
+When enabled, this extension manages the :attr:`~scrapy.Spider.state`
+attribute of your :class:`~scrapy.Spider` instance:
+
+-   When your spider closes (:signal:`spider_closed`), the contents of its
+    :attr:`~scrapy.Spider.state` attribute are serialized into a file named
+    ``spider.state`` in the :setting:`JOBDIR` folder.
+-   When your spider opens (:signal:`spider_opened`), if a previously-generated
+    ``spider.state`` file exists in the :setting:`JOBDIR` folder, it is loaded
+    into the :attr:`~scrapy.Spider.state` attribute.
+
+
+For an example, see :ref:`topics-keeping-persistent-state-between-batches`.
+
+Close spider extension
+~~~~~~~~~~~~~~~~~~~~~~
+
+.. module:: scrapy.extensions.closespider
+   :synopsis: Close spider extension
+
+.. class:: CloseSpider
+
+Closes a spider automatically when some conditions are met, using a specific
+closing reason for each condition.
+
+The conditions for closing a spider can be configured through the following
+settings:
+
+* :setting:`CLOSESPIDER_TIMEOUT`
+* :setting:`CLOSESPIDER_TIMEOUT_NO_ITEM`
+* :setting:`CLOSESPIDER_ITEMCOUNT`
+* :setting:`CLOSESPIDER_PAGECOUNT`
+* :setting:`CLOSESPIDER_ERRORCOUNT`
+
+.. note::
+
+   When a certain closing condition is met, requests which are
+   currently in the downloader queue (up to :setting:`CONCURRENT_REQUESTS`
+   requests) are still processed.
+
+.. setting:: CLOSESPIDER_TIMEOUT
+
+CLOSESPIDER_TIMEOUT
+"""""""""""""""""""
+
+Default: ``0``
+
+An integer which specifies a number of seconds. If the spider remains open for
+more than that number of second, it will be automatically closed with the
+reason ``closespider_timeout``. If zero (or non set), spiders won't be closed by
+timeout.
+
+.. setting:: CLOSESPIDER_TIMEOUT_NO_ITEM
+
+CLOSESPIDER_TIMEOUT_NO_ITEM
+"""""""""""""""""""""""""""
+
+Default: ``0``
+
+An integer which specifies a number of seconds. If the spider has not produced
+any items in the last number of seconds, it will be closed with the reason
+``closespider_timeout_no_item``. If zero (or non set), spiders won't be closed
+regardless if it hasn't produced any items.
+
+.. setting:: CLOSESPIDER_ITEMCOUNT
+
+CLOSESPIDER_ITEMCOUNT
+"""""""""""""""""""""
+
+Default: ``0``
+
+An integer which specifies a number of items. If the spider scrapes more than
+that amount and those items are passed by the item pipeline, the
+spider will be closed with the reason ``closespider_itemcount``.
+If zero (or non set), spiders won't be closed by number of passed items.
+
+.. setting:: CLOSESPIDER_PAGECOUNT
+
+CLOSESPIDER_PAGECOUNT
+"""""""""""""""""""""
+
+Default: ``0``
+
+An integer which specifies the maximum number of responses to crawl. If the spider
+crawls more than that, the spider will be closed with the reason
+``closespider_pagecount``. If zero (or non set), spiders won't be closed by
+number of crawled responses.
+
+.. setting:: CLOSESPIDER_PAGECOUNT_NO_ITEM
+
+CLOSESPIDER_PAGECOUNT_NO_ITEM
+"""""""""""""""""""""""""""""
+
+Default: ``0``
+
+An integer which specifies the maximum number of consecutive responses to crawl
+without items scraped. If the spider crawls more consecutive responses than that
+and no items are scraped in the meantime, the spider will be closed with the
+reason ``closespider_pagecount_no_item``. If zero (or not set), spiders won't be
+closed by number of crawled responses with no items.
+
+.. setting:: CLOSESPIDER_ERRORCOUNT
+
+CLOSESPIDER_ERRORCOUNT
+""""""""""""""""""""""
+
+Default: ``0``
+
+An integer which specifies the maximum number of errors to receive before
+closing the spider. If the spider generates more than that number of errors,
+it will be closed with the reason ``closespider_errorcount``. If zero (or non
+set), spiders won't be closed by number of errors.
+
+StatsMailer extension
+~~~~~~~~~~~~~~~~~~~~~
+
+.. module:: scrapy.extensions.statsmailer
+   :synopsis: StatsMailer extension
+
+.. class:: StatsMailer
+
+This simple extension can be used to send a notification e-mail every time a
+domain has finished scraping, including the Scrapy stats collected. The email
+will be sent to all recipients specified in the :setting:`STATSMAILER_RCPTS`
+setting.
+
+Emails can be sent using the :class:`~scrapy.mail.MailSender` class. To see a
+full list of parameters, including examples on how to instantiate
+:class:`~scrapy.mail.MailSender` and use mail settings, see
+:ref:`topics-email`.
+
+.. module:: scrapy.extensions.debug
+   :synopsis: Extensions for debugging Scrapy
+
+.. module:: scrapy.extensions.periodic_log
+   :synopsis: Periodic stats logging
+
+Periodic log extension
+~~~~~~~~~~~~~~~~~~~~~~
+
+.. class:: PeriodicLog
+
+This extension periodically logs rich stat data as a JSON object::
+
+    2023-08-04 02:30:57 [scrapy.extensions.logstats] INFO: Crawled 976 pages (at 162 pages/min), scraped 925 items (at 161 items/min)
+    2023-08-04 02:30:57 [scrapy.extensions.periodic_log] INFO: {
+        "delta": {
+            "downloader/request_bytes": 55582,
+            "downloader/request_count": 162,
+            "downloader/request_method_count/GET": 162,
+            "downloader/response_bytes": 618133,
+            "downloader/response_count": 162,
+            "downloader/response_status_count/200": 162,
+            "item_scraped_count": 161
+        },
+        "stats": {
+            "downloader/request_bytes": 338243,
+            "downloader/request_count": 992,
+            "downloader/request_method_count/GET": 992,
+            "downloader/response_bytes": 3836736,
+            "downloader/response_count": 976,
+            "downloader/response_status_count/200": 976,
+            "item_scraped_count": 925,
+            "log_count/INFO": 21,
+            "log_count/WARNING": 1,
+            "scheduler/dequeued": 992,
+            "scheduler/dequeued/memory": 992,
+            "scheduler/enqueued": 1050,
+            "scheduler/enqueued/memory": 1050
+        },
+        "time": {
+            "elapsed": 360.008903,
+            "log_interval": 60.0,
+            "log_interval_real": 60.006694,
+            "start_time": "2023-08-03 23:24:57",
+            "utcnow": "2023-08-03 23:30:57"
+        }
+    }
+
+This extension logs the following configurable sections:
+
+-   ``"delta"`` shows how some numeric stats have changed since the last stats
+    log message.
+
+    The :setting:`PERIODIC_LOG_DELTA` setting determines the target stats. They
+    must have ``int`` or ``float`` values.
+
+-   ``"stats"`` shows the current value of some stats.
+
+    The :setting:`PERIODIC_LOG_STATS` setting determines the target stats.
+
+-   ``"time"`` shows detailed timing data.
+
+    The :setting:`PERIODIC_LOG_TIMING_ENABLED` setting determines whether or
+    not to show this section.
+
+This extension logs data at the start, then on a fixed time interval
+configurable through the :setting:`LOGSTATS_INTERVAL` setting, and finally
+right before the crawl ends.
+
+
+Example extension configuration:
+
+.. code-block:: python
+
+    custom_settings = {
+        "LOG_LEVEL": "INFO",
+        "PERIODIC_LOG_STATS": {
+            "include": ["downloader/", "scheduler/", "log_count/", "item_scraped_count/"],
+        },
+        "PERIODIC_LOG_DELTA": {"include": ["downloader/"]},
+        "PERIODIC_LOG_TIMING_ENABLED": True,
+        "EXTENSIONS": {
+            "scrapy.extensions.periodic_log.PeriodicLog": 0,
+        },
+    }
+
+.. setting:: PERIODIC_LOG_DELTA
+
+PERIODIC_LOG_DELTA
+""""""""""""""""""
+
+Default: ``None``
+
+* ``"PERIODIC_LOG_DELTA": True`` - show deltas for all ``int`` and ``float`` stat values.
+* ``"PERIODIC_LOG_DELTA": {"include": ["downloader/", "scheduler/"]}`` - show deltas for stats with names containing any configured substring.
+* ``"PERIODIC_LOG_DELTA": {"exclude": ["downloader/"]}`` - show deltas for all stats with names not containing any configured substring.
+
+.. setting:: PERIODIC_LOG_STATS
+
+PERIODIC_LOG_STATS
+""""""""""""""""""
+
+Default: ``None``
+
+* ``"PERIODIC_LOG_STATS": True`` - show the current value of all stats.
+* ``"PERIODIC_LOG_STATS": {"include": ["downloader/", "scheduler/"]}`` - show current values for stats with names containing any configured substring.
+* ``"PERIODIC_LOG_STATS": {"exclude": ["downloader/"]}`` - show current values for all stats with names not containing any configured substring.
+
+
+.. setting:: PERIODIC_LOG_TIMING_ENABLED
+
+PERIODIC_LOG_TIMING_ENABLED
+"""""""""""""""""""""""""""
+
+Default: ``False``
+
+``True`` enables logging of timing data (i.e. the ``"time"`` section).
+
+
+Debugging extensions
+--------------------
+
+Stack trace dump extension
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. class:: StackTraceDump
+
+Dumps information about the running process when a `SIGQUIT`_ or `SIGUSR2`_
+signal is received. The information dumped is the following:
+
+1. engine status (using ``scrapy.utils.engine.get_engine_status()``)
+2. live references (see :ref:`topics-leaks-trackrefs`)
+3. stack trace of all threads
+
+After the stack trace and engine status is dumped, the Scrapy process continues
+running normally.
+
+This extension only works on POSIX-compliant platforms (i.e. not Windows),
+because the `SIGQUIT`_ and `SIGUSR2`_ signals are not available on Windows.
+
+There are at least two ways to send Scrapy the `SIGQUIT`_ signal:
+
+1. By pressing Ctrl-\ while a Scrapy process is running (Linux only?)
+2. By running this command (assuming ``<pid>`` is the process id of the Scrapy
+   process)::
+
+    kill -QUIT <pid>
+
+.. _SIGUSR2: https://en.wikipedia.org/wiki/SIGUSR1_and_SIGUSR2
+.. _SIGQUIT: https://en.wikipedia.org/wiki/SIGQUIT
+
+Debugger extension
+~~~~~~~~~~~~~~~~~~
+
+.. class:: Debugger
+
+Invokes a :doc:`Python debugger <library/pdb>` inside a running Scrapy process when a `SIGUSR2`_
+signal is received. After the debugger is exited, the Scrapy process continues
+running normally.
+
+This extension only works on POSIX-compliant platforms (i.e. not Windows).
+
+
+--- END OF extensions_扩展.txt ---
+
+.. _topics-signals:
+
+=======
+Signals
+=======
+
+Scrapy uses signals extensively to notify when certain events occur. You can
+catch some of those signals in your Scrapy project (using an :ref:`extension
+<topics-extensions>`, for example) to perform additional tasks or extend Scrapy
+to add functionality not provided out of the box.
+
+Even though signals provide several arguments, the handlers that catch them
+don't need to accept all of them - the signal dispatching mechanism will only
+deliver the arguments that the handler receives.
+
+You can connect to signals (or send your own) through the
+:ref:`topics-api-signals`.
+
+Here is a simple example showing how you can catch signals and perform some action:
+
+.. code-block:: python
+
+    from scrapy import signals
+    from scrapy import Spider
+
+
+    class DmozSpider(Spider):
+        name = "dmoz"
+        allowed_domains = ["dmoz.org"]
+        start_urls = [
+            "http://www.dmoz.org/Computers/Programming/Languages/Python/Books/",
+            "http://www.dmoz.org/Computers/Programming/Languages/Python/Resources/",
+        ]
+
+        @classmethod
+        def from_crawler(cls, crawler, *args, **kwargs):
+            spider = super(DmozSpider, cls).from_crawler(crawler, *args, **kwargs)
+            crawler.signals.connect(spider.spider_closed, signal=signals.spider_closed)
+            return spider
+
+        def spider_closed(self, spider):
+            spider.logger.info("Spider closed: %s", spider.name)
+
+        def parse(self, response):
+            pass
+
+.. _signal-deferred:
+
+Deferred signal handlers
+========================
+
+Some signals support returning :class:`~twisted.internet.defer.Deferred`
+or :term:`awaitable objects <awaitable>` from their handlers, allowing
+you to run asynchronous code that does not block Scrapy. If a signal
+handler returns one of these objects, Scrapy waits for that asynchronous
+operation to finish.
+
+Let's take an example using :ref:`coroutines <topics-coroutines>`:
+
+.. code-block:: python
+
+    import scrapy
+
+
+    class SignalSpider(scrapy.Spider):
+        name = "signals"
+        start_urls = ["https://quotes.toscrape.com/page/1/"]
+
+        @classmethod
+        def from_crawler(cls, crawler, *args, **kwargs):
+            spider = super(SignalSpider, cls).from_crawler(crawler, *args, **kwargs)
+            crawler.signals.connect(spider.item_scraped, signal=signals.item_scraped)
+            return spider
+
+        async def item_scraped(self, item):
+            # Send the scraped item to the server
+            response = await treq.post(
+                "http://example.com/post",
+                json.dumps(item).encode("ascii"),
+                headers={b"Content-Type": [b"application/json"]},
+            )
+
+            return response
+
+        def parse(self, response):
+            for quote in response.css("div.quote"):
+                yield {
+                    "text": quote.css("span.text::text").get(),
+                    "author": quote.css("small.author::text").get(),
+                    "tags": quote.css("div.tags a.tag::text").getall(),
+                }
+
+See the :ref:`topics-signals-ref` below to know which signals support
+:class:`~twisted.internet.defer.Deferred` and :term:`awaitable objects <awaitable>`.
+
+.. _topics-signals-ref:
+
+Built-in signals reference
+==========================
+
+.. module:: scrapy.signals
+   :synopsis: Signals definitions
+
+Here's the list of Scrapy built-in signals and their meaning.
+
+Engine signals
+--------------
+
+engine_started
+~~~~~~~~~~~~~~
+
+.. signal:: engine_started
+.. function:: engine_started()
+
+    Sent when the Scrapy engine has started crawling.
+
+    This signal supports returning deferreds from its handlers.
+
+.. note:: This signal may be fired *after* the :signal:`spider_opened` signal,
+    depending on how the spider was started. So **don't** rely on this signal
+    getting fired before :signal:`spider_opened`.
+
+engine_stopped
+~~~~~~~~~~~~~~
+
+.. signal:: engine_stopped
+.. function:: engine_stopped()
+
+    Sent when the Scrapy engine is stopped (for example, when a crawling
+    process has finished).
+
+    This signal supports returning deferreds from its handlers.
+
+scheduler_empty
+~~~~~~~~~~~~~~~
+
+.. signal:: scheduler_empty
+.. function:: scheduler_empty()
+
+    Sent whenever the engine asks for a pending request from the
+    :ref:`scheduler <topics-scheduler>` (i.e. calls its
+    :meth:`~scrapy.core.scheduler.BaseScheduler.next_request` method) and the
+    scheduler returns none.
+
+    See :ref:`start-requests-lazy` for an example.
+
+Item signals
+------------
+
+.. note::
+    As at max :setting:`CONCURRENT_ITEMS` items are processed in
+    parallel, many deferreds are fired together using
+    :class:`~twisted.internet.defer.DeferredList`. Hence the next
+    batch waits for the :class:`~twisted.internet.defer.DeferredList`
+    to fire and then runs the respective item signal handler for
+    the next batch of scraped items.
+
+item_scraped
+~~~~~~~~~~~~
+
+.. signal:: item_scraped
+.. function:: item_scraped(item, response, spider)
+
+    Sent when an item has been scraped, after it has passed all the
+    :ref:`topics-item-pipeline` stages (without being dropped).
+
+    This signal supports returning deferreds from its handlers.
+
+    :param item: the scraped item
+    :type item: :ref:`item object <item-types>`
+
+    :param spider: the spider which scraped the item
+    :type spider: :class:`~scrapy.Spider` object
+
+    :param response: the response from where the item was scraped, or ``None``
+        if it was yielded from :meth:`~scrapy.Spider.start`.
+    :type response: :class:`~scrapy.http.Response` | ``None``
+
+item_dropped
+~~~~~~~~~~~~
+
+.. signal:: item_dropped
+.. function:: item_dropped(item, response, exception, spider)
+
+    Sent after an item has been dropped from the :ref:`topics-item-pipeline`
+    when some stage raised a :exc:`~scrapy.exceptions.DropItem` exception.
+
+    This signal supports returning deferreds from its handlers.
+
+    :param item: the item dropped from the :ref:`topics-item-pipeline`
+    :type item: :ref:`item object <item-types>`
+
+    :param spider: the spider which scraped the item
+    :type spider: :class:`~scrapy.Spider` object
+
+    :param response: the response from where the item was dropped, or ``None``
+        if it was yielded from :meth:`~scrapy.Spider.start`.
+    :type response: :class:`~scrapy.http.Response` | ``None``
+
+    :param exception: the exception (which must be a
+        :exc:`~scrapy.exceptions.DropItem` subclass) which caused the item
+        to be dropped
+    :type exception: :exc:`~scrapy.exceptions.DropItem` exception
+
+item_error
+~~~~~~~~~~
+
+.. signal:: item_error
+.. function:: item_error(item, response, spider, failure)
+
+    Sent when a :ref:`topics-item-pipeline` generates an error (i.e. raises
+    an exception), except :exc:`~scrapy.exceptions.DropItem` exception.
+
+    This signal supports returning deferreds from its handlers.
+
+    :param item: the item that caused the error in the :ref:`topics-item-pipeline`
+    :type item: :ref:`item object <item-types>`
+
+    :param response: the response being processed when the exception was
+        raised, or ``None`` if it was yielded from
+        :meth:`~scrapy.Spider.start`.
+    :type response: :class:`~scrapy.http.Response` | ``None``
+
+    :param spider: the spider which raised the exception
+    :type spider: :class:`~scrapy.Spider` object
+
+    :param failure: the exception raised
+    :type failure: twisted.python.failure.Failure
+
+Spider signals
+--------------
+
+spider_closed
+~~~~~~~~~~~~~
+
+.. signal:: spider_closed
+.. function:: spider_closed(spider, reason)
+
+    Sent after a spider has been closed. This can be used to release per-spider
+    resources reserved on :signal:`spider_opened`.
+
+    This signal supports returning deferreds from its handlers.
+
+    :param spider: the spider which has been closed
+    :type spider: :class:`~scrapy.Spider` object
+
+    :param reason: a string which describes the reason why the spider was closed. If
+        it was closed because the spider has completed scraping, the reason
+        is ``'finished'``. Otherwise, if the spider was manually closed by
+        calling the ``close_spider`` engine method, then the reason is the one
+        passed in the ``reason`` argument of that method (which defaults to
+        ``'cancelled'``). If the engine was shutdown (for example, by hitting
+        Ctrl-C to stop it) the reason will be ``'shutdown'``.
+    :type reason: str
+
+spider_opened
+~~~~~~~~~~~~~
+
+.. signal:: spider_opened
+.. function:: spider_opened(spider)
+
+    Sent after a spider has been opened for crawling. This is typically used to
+    reserve per-spider resources, but can be used for any task that needs to be
+    performed when a spider is opened.
+
+    This signal supports returning deferreds from its handlers.
+
+    :param spider: the spider which has been opened
+    :type spider: :class:`~scrapy.Spider` object
+
+spider_idle
+~~~~~~~~~~~
+
+.. signal:: spider_idle
+.. function:: spider_idle(spider)
+
+    Sent when a spider has gone idle, which means the spider has no further:
+
+        * requests waiting to be downloaded
+        * requests scheduled
+        * items being processed in the item pipeline
+
+    If the idle state persists after all handlers of this signal have finished,
+    the engine starts closing the spider. After the spider has finished
+    closing, the :signal:`spider_closed` signal is sent.
+
+    You may raise a :exc:`~scrapy.exceptions.DontCloseSpider` exception to
+    prevent the spider from being closed.
+
+    Alternatively, you may raise a :exc:`~scrapy.exceptions.CloseSpider`
+    exception to provide a custom spider closing reason. An
+    idle handler is the perfect place to put some code that assesses
+    the final spider results and update the final closing reason
+    accordingly (e.g. setting it to 'too_few_results' instead of
+    'finished').
+
+    This signal does not support returning deferreds from its handlers.
+
+    :param spider: the spider which has gone idle
+    :type spider: :class:`~scrapy.Spider` object
+
+.. note:: Scheduling some requests in your :signal:`spider_idle` handler does
+    **not** guarantee that it can prevent the spider from being closed,
+    although it sometimes can. That's because the spider may still remain idle
+    if all the scheduled requests are rejected by the scheduler (e.g. filtered
+    due to duplication).
+
+spider_error
+~~~~~~~~~~~~
+
+.. signal:: spider_error
+.. function:: spider_error(failure, response, spider)
+
+    Sent when a spider callback generates an error (i.e. raises an exception).
+
+    This signal does not support returning deferreds from its handlers.
+
+    :param failure: the exception raised
+    :type failure: twisted.python.failure.Failure
+
+    :param response: the response being processed when the exception was raised
+    :type response: :class:`~scrapy.http.Response` object
+
+    :param spider: the spider which raised the exception
+    :type spider: :class:`~scrapy.Spider` object
+
+feed_slot_closed
+~~~~~~~~~~~~~~~~
+
+.. signal:: feed_slot_closed
+.. function:: feed_slot_closed(slot)
+
+    Sent when a :ref:`feed exports <topics-feed-exports>` slot is closed.
+
+    This signal supports returning deferreds from its handlers.
+
+    :param slot: the slot closed
+    :type slot: scrapy.extensions.feedexport.FeedSlot
+
+
+feed_exporter_closed
+~~~~~~~~~~~~~~~~~~~~
+
+.. signal:: feed_exporter_closed
+.. function:: feed_exporter_closed()
+
+    Sent when the :ref:`feed exports <topics-feed-exports>` extension is closed,
+    during the handling of the :signal:`spider_closed` signal by the extension,
+    after all feed exporting has been handled.
+
+    This signal supports returning deferreds from its handlers.
+
+
+Request signals
+---------------
+
+request_scheduled
+~~~~~~~~~~~~~~~~~
+
+.. signal:: request_scheduled
+.. function:: request_scheduled(request, spider)
+
+    Sent when the engine is asked to schedule a :class:`~scrapy.Request`, to be
+    downloaded later, before the request reaches the :ref:`scheduler
+    <topics-scheduler>`.
+
+    Raise :exc:`~scrapy.exceptions.IgnoreRequest` to drop a request before it
+    reaches the scheduler.
+
+    This signal does not support returning deferreds from its handlers.
+
+    .. versionadded:: 2.11.2
+        Allow dropping requests with :exc:`~scrapy.exceptions.IgnoreRequest`.
+
+    :param request: the request that reached the scheduler
+    :type request: :class:`~scrapy.Request` object
+
+    :param spider: the spider that yielded the request
+    :type spider: :class:`~scrapy.Spider` object
+
+request_dropped
+~~~~~~~~~~~~~~~
+
+.. signal:: request_dropped
+.. function:: request_dropped(request, spider)
+
+    Sent when a :class:`~scrapy.Request`, scheduled by the engine to be
+    downloaded later, is rejected by the scheduler.
+
+    This signal does not support returning deferreds from its handlers.
+
+    :param request: the request that reached the scheduler
+    :type request: :class:`~scrapy.Request` object
+
+    :param spider: the spider that yielded the request
+    :type spider: :class:`~scrapy.Spider` object
+
+request_reached_downloader
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. signal:: request_reached_downloader
+.. function:: request_reached_downloader(request, spider)
+
+    Sent when a :class:`~scrapy.Request` reached downloader.
+
+    This signal does not support returning deferreds from its handlers.
+
+    :param request: the request that reached downloader
+    :type request: :class:`~scrapy.Request` object
+
+    :param spider: the spider that yielded the request
+    :type spider: :class:`~scrapy.Spider` object
+
+request_left_downloader
+~~~~~~~~~~~~~~~~~~~~~~~
+
+.. signal:: request_left_downloader
+.. function:: request_left_downloader(request, spider)
+
+    .. versionadded:: 2.0
+
+    Sent when a :class:`~scrapy.Request` leaves the downloader, even in case of
+    failure.
+
+    This signal does not support returning deferreds from its handlers.
+
+    :param request: the request that reached the downloader
+    :type request: :class:`~scrapy.Request` object
+
+    :param spider: the spider that yielded the request
+    :type spider: :class:`~scrapy.Spider` object
+
+bytes_received
+~~~~~~~~~~~~~~
+
+.. versionadded:: 2.2
+
+.. signal:: bytes_received
+.. function:: bytes_received(data, request, spider)
+
+    Sent by the HTTP 1.1 and S3 download handlers when a group of bytes is
+    received for a specific request. This signal might be fired multiple
+    times for the same request, with partial data each time. For instance,
+    a possible scenario for a 25 kb response would be two signals fired
+    with 10 kb of data, and a final one with 5 kb of data.
+
+    Handlers for this signal can stop the download of a response while it
+    is in progress by raising the :exc:`~scrapy.exceptions.StopDownload`
+    exception. Please refer to the :ref:`topics-stop-response-download` topic
+    for additional information and examples.
+
+    This signal does not support returning deferreds from its handlers.
+
+    :param data: the data received by the download handler
+    :type data: :class:`bytes` object
+
+    :param request: the request that generated the download
+    :type request: :class:`~scrapy.Request` object
+
+    :param spider: the spider associated with the response
+    :type spider: :class:`~scrapy.Spider` object
+
+headers_received
+~~~~~~~~~~~~~~~~
+
+.. versionadded:: 2.5
+
+.. signal:: headers_received
+.. function:: headers_received(headers, body_length, request, spider)
+
+    Sent by the HTTP 1.1 and S3 download handlers when the response headers are
+    available for a given request, before downloading any additional content.
+
+    Handlers for this signal can stop the download of a response while it
+    is in progress by raising the :exc:`~scrapy.exceptions.StopDownload`
+    exception. Please refer to the :ref:`topics-stop-response-download` topic
+    for additional information and examples.
+
+    This signal does not support returning deferreds from its handlers.
+
+    :param headers: the headers received by the download handler
+    :type headers: :class:`scrapy.http.headers.Headers` object
+
+    :param body_length: expected size of the response body, in bytes
+    :type body_length: `int`
+
+    :param request: the request that generated the download
+    :type request: :class:`~scrapy.Request` object
+
+    :param spider: the spider associated with the response
+    :type spider: :class:`~scrapy.Spider` object
+
+Response signals
+----------------
+
+response_received
+~~~~~~~~~~~~~~~~~
+
+.. signal:: response_received
+.. function:: response_received(response, request, spider)
+
+    Sent when the engine receives a new :class:`~scrapy.http.Response` from the
+    downloader.
+
+    This signal does not support returning deferreds from its handlers.
+
+    :param response: the response received
+    :type response: :class:`~scrapy.http.Response` object
+
+    :param request: the request that generated the response
+    :type request: :class:`~scrapy.Request` object
+
+    :param spider: the spider for which the response is intended
+    :type spider: :class:`~scrapy.Spider` object
+
+.. note:: The ``request`` argument might not contain the original request that
+    reached the downloader, if a :ref:`topics-downloader-middleware` modifies
+    the :class:`~scrapy.http.Response` object and sets a specific ``request``
+    attribute.
+
+response_downloaded
+~~~~~~~~~~~~~~~~~~~
+
+.. signal:: response_downloaded
+.. function:: response_downloaded(response, request, spider)
+
+    Sent by the downloader right after a ``HTTPResponse`` is downloaded.
+
+    This signal does not support returning deferreds from its handlers.
+
+    :param response: the response downloaded
+    :type response: :class:`~scrapy.http.Response` object
+
+    :param request: the request that generated the response
+    :type request: :class:`~scrapy.Request` object
+
+    :param spider: the spider for which the response is intended
+    :type spider: :class:`~scrapy.Spider` object
+
+
+--- END OF signals_信号.txt ---
+
+.. _topics-scheduler:
+
+=========
+Scheduler
+=========
+
+.. module:: scrapy.core.scheduler
+
+The scheduler component receives requests from the :ref:`engine <component-engine>`
+and stores them into persistent and/or non-persistent data structures.
+It also gets those requests and feeds them back to the engine when it
+asks for a next request to be downloaded.
+
+
+Overriding the default scheduler
+================================
+
+You can use your own custom scheduler class by supplying its full
+Python path in the :setting:`SCHEDULER` setting.
+
+
+Minimal scheduler interface
+===========================
+
+.. autoclass:: BaseScheduler
+   :members:
+
+
+Default scheduler
+=================
+
+.. autoclass:: Scheduler()
+   :members:
+   :special-members: __init__, __len__
+
+
+--- END OF scheduler_调度器.txt ---
+
+.. _topics-exporters:
+
+==============
+Item Exporters
+==============
+
+.. module:: scrapy.exporters
+   :synopsis: Item Exporters
+
+Once you have scraped your items, you often want to persist or export those
+items, to use the data in some other application. That is, after all, the whole
+purpose of the scraping process.
+
+For this purpose Scrapy provides a collection of Item Exporters for different
+output formats, such as XML, CSV or JSON.
+
+Using Item Exporters
+====================
+
+If you are in a hurry, and just want to use an Item Exporter to output scraped
+data see the :ref:`topics-feed-exports`. Otherwise, if you want to know how
+Item Exporters work or need more custom functionality (not covered by the
+default exports), continue reading below.
+
+In order to use an Item Exporter, you  must instantiate it with its required
+args. Each Item Exporter requires different arguments, so check each exporter
+documentation to be sure, in :ref:`topics-exporters-reference`. After you have
+instantiated your exporter, you have to:
+
+1. call the method :meth:`~BaseItemExporter.start_exporting` in order to
+signal the beginning of the exporting process
+
+2. call the :meth:`~BaseItemExporter.export_item` method for each item you want
+to export
+
+3. and finally call the :meth:`~BaseItemExporter.finish_exporting` to signal
+the end of the exporting process
+
+Here you can see an :doc:`Item Pipeline <item-pipeline>` which uses multiple
+Item Exporters to group scraped items to different files according to the
+value of one of their fields:
+
+.. code-block:: python
+
+    from itemadapter import ItemAdapter
+    from scrapy.exporters import XmlItemExporter
+
+
+    class PerYearXmlExportPipeline:
+        """Distribute items across multiple XML files according to their 'year' field"""
+
+        def open_spider(self, spider):
+            self.year_to_exporter = {}
+
+        def close_spider(self, spider):
+            for exporter, xml_file in self.year_to_exporter.values():
+                exporter.finish_exporting()
+                xml_file.close()
+
+        def _exporter_for_item(self, item):
+            adapter = ItemAdapter(item)
+            year = adapter["year"]
+            if year not in self.year_to_exporter:
+                xml_file = open(f"{year}.xml", "wb")
+                exporter = XmlItemExporter(xml_file)
+                exporter.start_exporting()
+                self.year_to_exporter[year] = (exporter, xml_file)
+            return self.year_to_exporter[year][0]
+
+        def process_item(self, item, spider):
+            exporter = self._exporter_for_item(item)
+            exporter.export_item(item)
+            return item
+
+
+.. _topics-exporters-field-serialization:
+
+Serialization of item fields
+============================
+
+By default, the field values are passed unmodified to the underlying
+serialization library, and the decision of how to serialize them is delegated
+to each particular serialization library.
+
+However, you can customize how each field value is serialized *before it is
+passed to the serialization library*.
+
+There are two ways to customize how a field will be serialized, which are
+described next.
+
+.. _topics-exporters-serializers:
+
+1. Declaring a serializer in the field
+--------------------------------------
+
+If you use :class:`~scrapy.Item` you can declare a serializer in the
+:ref:`field metadata <topics-items-fields>`. The serializer must be
+a callable which receives a value and returns its serialized form.
+
+Example:
+
+.. code-block:: python
+
+    import scrapy
+
+
+    def serialize_price(value):
+        return f"$ {str(value)}"
+
+
+    class Product(scrapy.Item):
+        name = scrapy.Field()
+        price = scrapy.Field(serializer=serialize_price)
+
+
+2. Overriding the serialize_field() method
+------------------------------------------
+
+You can also override the :meth:`~BaseItemExporter.serialize_field()` method to
+customize how your field value will be exported.
+
+Make sure you call the base class :meth:`~BaseItemExporter.serialize_field()` method
+after your custom code.
+
+Example:
+
+.. code-block:: python
+
+      from scrapy.exporters import XmlItemExporter
+
+
+      class ProductXmlExporter(XmlItemExporter):
+          def serialize_field(self, field, name, value):
+              if name == "price":
+                  return f"$ {str(value)}"
+              return super().serialize_field(field, name, value)
+
+.. _topics-exporters-reference:
+
+Built-in Item Exporters reference
+=================================
+
+Here is a list of the Item Exporters bundled with Scrapy. Some of them contain
+output examples, which assume you're exporting these two items:
+
+.. skip: next
+.. code-block:: python
+
+    Item(name="Color TV", price="1200")
+    Item(name="DVD player", price="200")
+
+BaseItemExporter
+----------------
+
+.. class:: BaseItemExporter(fields_to_export=None, export_empty_fields=False, encoding='utf-8', indent=0, dont_fail=False)
+
+   This is the (abstract) base class for all Item Exporters. It provides
+   support for common features used by all (concrete) Item Exporters, such as
+   defining what fields to export, whether to export empty fields, or which
+   encoding to use.
+
+   These features can be configured through the ``__init__`` method arguments which
+   populate their respective instance attributes: :attr:`fields_to_export`,
+   :attr:`export_empty_fields`, :attr:`encoding`, :attr:`indent`.
+
+   .. versionadded:: 2.0
+      The *dont_fail* parameter.
+
+   .. method:: export_item(item)
+
+      Exports the given item. This method must be implemented in subclasses.
+
+   .. method:: serialize_field(field, name, value)
+
+      Return the serialized value for the given field. You can override this
+      method (in your custom Item Exporters) if you want to control how a
+      particular field or value will be serialized/exported.
+
+      By default, this method looks for a serializer :ref:`declared in the item
+      field <topics-exporters-serializers>` and returns the result of applying
+      that serializer to the value. If no serializer is found, it returns the
+      value unchanged.
+
+      :param field: the field being serialized. If the source :ref:`item object
+          <item-types>` does not define field metadata, *field* is an empty
+          :class:`dict`.
+      :type field: :class:`~scrapy.Field` object or a :class:`dict` instance
+
+      :param name: the name of the field being serialized
+      :type name: str
+
+      :param value: the value being serialized
+
+   .. method:: start_exporting()
+
+      Signal the beginning of the exporting process. Some exporters may use
+      this to generate some required header (for example, the
+      :class:`XmlItemExporter`). You must call this method before exporting any
+      items.
+
+   .. method:: finish_exporting()
+
+      Signal the end of the exporting process. Some exporters may use this to
+      generate some required footer (for example, the
+      :class:`XmlItemExporter`). You must always call this method after you
+      have no more items to export.
+
+   .. attribute:: fields_to_export
+
+      Fields to export, their order [1]_ and their output names.
+
+      Possible values are:
+
+      -   ``None`` (all fields [2]_, default)
+
+      -   A list of fields::
+
+              ['field1', 'field2']
+
+      -   A dict where keys are fields and values are output names::
+
+              {'field1': 'Field 1', 'field2': 'Field 2'}
+
+      .. [1] Not all exporters respect the specified field order.
+      .. [2] When using :ref:`item objects <item-types>` that do not expose
+             all their possible fields, exporters that do not support exporting
+             a different subset of fields per item will only export the fields
+             found in the first item exported.
+
+   .. attribute:: export_empty_fields
+
+      Whether to include empty/unpopulated item fields in the exported data.
+      Defaults to ``False``. Some exporters (like :class:`CsvItemExporter`)
+      ignore this attribute and always export all empty fields.
+
+      This option is ignored for dict items.
+
+   .. attribute:: encoding
+
+      The output character encoding.
+
+   .. attribute:: indent
+
+      Amount of spaces used to indent the output on each level. Defaults to ``0``.
+
+      * ``indent=None`` selects the most compact representation,
+        all items in the same line with no indentation
+      * ``indent<=0`` each item on its own line, no indentation
+      * ``indent>0`` each item on its own line, indented with the provided numeric value
+
+PythonItemExporter
+------------------
+
+.. autoclass:: PythonItemExporter
+
+
+.. highlight:: none
+
+XmlItemExporter
+---------------
+
+.. class:: XmlItemExporter(file, item_element='item', root_element='items', **kwargs)
+
+   Exports items in XML format to the specified file object.
+
+   :param file: the file-like object to use for exporting the data. Its ``write`` method should
+                accept ``bytes`` (a disk file opened in binary mode, a ``io.BytesIO`` object, etc)
+
+   :param root_element: The name of root element in the exported XML.
+   :type root_element: str
+
+   :param item_element: The name of each item element in the exported XML.
+   :type item_element: str
+
+   The additional keyword arguments of this ``__init__`` method are passed to the
+   :class:`BaseItemExporter` ``__init__`` method.
+
+   A typical output of this exporter would be::
+
+       <?xml version="1.0" encoding="utf-8"?>
+       <items>
+         <item>
+           <name>Color TV</name>
+           <price>1200</price>
+        </item>
+         <item>
+           <name>DVD player</name>
+           <price>200</price>
+        </item>
+       </items>
+
+   Unless overridden in the :meth:`serialize_field` method, multi-valued fields are
+   exported by serializing each value inside a ``<value>`` element. This is for
+   convenience, as multi-valued fields are very common.
+
+   For example, the item::
+
+        Item(name=['John', 'Doe'], age='23')
+
+   Would be serialized as::
+
+       <?xml version="1.0" encoding="utf-8"?>
+       <items>
+         <item>
+           <name>
+             <value>John</value>
+             <value>Doe</value>
+           </name>
+           <age>23</age>
+         </item>
+       </items>
+
+CsvItemExporter
+---------------
+
+.. class:: CsvItemExporter(file, include_headers_line=True, join_multivalued=',', errors=None, **kwargs)
+
+   Exports items in CSV format to the given file-like object. If the
+   :attr:`fields_to_export` attribute is set, it will be used to define the
+   CSV columns, their order and their column names. The
+   :attr:`export_empty_fields` attribute has no effect on this exporter.
+
+   :param file: the file-like object to use for exporting the data. Its ``write`` method should
+                accept ``bytes`` (a disk file opened in binary mode, a ``io.BytesIO`` object, etc)
+
+   :param include_headers_line: If enabled, makes the exporter output a header
+      line with the field names taken from
+      :attr:`BaseItemExporter.fields_to_export` or the first exported item fields.
+   :type include_headers_line: bool
+
+   :param join_multivalued: The char (or chars) that will be used for joining
+      multi-valued fields, if found.
+   :type include_headers_line: str
+
+   :param errors: The optional string that specifies how encoding and decoding
+      errors are to be handled. For more information see
+      :class:`io.TextIOWrapper`.
+   :type errors: str
+
+   The additional keyword arguments of this ``__init__`` method are passed to the
+   :class:`BaseItemExporter` ``__init__`` method, and the leftover arguments to the
+   :func:`csv.writer` function, so you can use any :func:`csv.writer` function
+   argument to customize this exporter.
+
+   A typical output of this exporter would be::
+
+      product,price
+      Color TV,1200
+      DVD player,200
+
+PickleItemExporter
+------------------
+
+.. class:: PickleItemExporter(file, protocol=0, **kwargs)
+
+   Exports items in pickle format to the given file-like object.
+
+   :param file: the file-like object to use for exporting the data. Its ``write`` method should
+                accept ``bytes`` (a disk file opened in binary mode, a ``io.BytesIO`` object, etc)
+
+   :param protocol: The pickle protocol to use.
+   :type protocol: int
+
+   For more information, see :mod:`pickle`.
+
+   The additional keyword arguments of this ``__init__`` method are passed to the
+   :class:`BaseItemExporter` ``__init__`` method.
+
+   Pickle isn't a human readable format, so no output examples are provided.
+
+PprintItemExporter
+------------------
+
+.. class:: PprintItemExporter(file, **kwargs)
+
+   Exports items in pretty print format to the specified file object.
+
+   :param file: the file-like object to use for exporting the data. Its ``write`` method should
+                accept ``bytes`` (a disk file opened in binary mode, a ``io.BytesIO`` object, etc)
+
+   The additional keyword arguments of this ``__init__`` method are passed to the
+   :class:`BaseItemExporter` ``__init__`` method.
+
+   A typical output of this exporter would be::
+
+        {'name': 'Color TV', 'price': '1200'}
+        {'name': 'DVD player', 'price': '200'}
+
+   Longer lines (when present) are pretty-formatted.
+
+JsonItemExporter
+----------------
+
+.. class:: JsonItemExporter(file, **kwargs)
+
+   Exports items in JSON format to the specified file-like object, writing all
+   objects as a list of objects. The additional ``__init__`` method arguments are
+   passed to the :class:`BaseItemExporter` ``__init__`` method, and the leftover
+   arguments to the :class:`~json.JSONEncoder` ``__init__`` method, so you can use any
+   :class:`~json.JSONEncoder` ``__init__`` method argument to customize this exporter.
+
+   :param file: the file-like object to use for exporting the data. Its ``write`` method should
+                accept ``bytes`` (a disk file opened in binary mode, a ``io.BytesIO`` object, etc)
+
+   A typical output of this exporter would be::
+
+        [{"name": "Color TV", "price": "1200"},
+        {"name": "DVD player", "price": "200"}]
+
+   .. _json-with-large-data:
+
+   .. warning:: JSON is very simple and flexible serialization format, but it
+      doesn't scale well for large amounts of data since incremental (aka.
+      stream-mode) parsing is not well supported (if at all) among JSON parsers
+      (on any language), and most of them just parse the entire object in
+      memory. If you want the power and simplicity of JSON with a more
+      stream-friendly format, consider using :class:`JsonLinesItemExporter`
+      instead, or splitting the output in multiple chunks.
+
+JsonLinesItemExporter
+---------------------
+
+.. class:: JsonLinesItemExporter(file, **kwargs)
+
+   Exports items in JSON format to the specified file-like object, writing one
+   JSON-encoded item per line. The additional ``__init__`` method arguments are passed
+   to the :class:`BaseItemExporter` ``__init__`` method, and the leftover arguments to
+   the :class:`~json.JSONEncoder` ``__init__`` method, so you can use any
+   :class:`~json.JSONEncoder` ``__init__`` method argument to customize this exporter.
+
+   :param file: the file-like object to use for exporting the data. Its ``write`` method should
+                accept ``bytes`` (a disk file opened in binary mode, a ``io.BytesIO`` object, etc)
+
+   A typical output of this exporter would be::
+
+        {"name": "Color TV", "price": "1200"}
+        {"name": "DVD player", "price": "200"}
+
+   Unlike the one produced by :class:`JsonItemExporter`, the format produced by
+   this exporter is well suited for serializing large amounts of data.
+
+MarshalItemExporter
+-------------------
+
+.. autoclass:: MarshalItemExporter
+
+
+--- END OF Item exporters_Item数据导出器.txt ---
+
+.. _topics-components:
+
+==========
+Components
+==========
+
+A Scrapy component is any class whose objects are built using
+:func:`~scrapy.utils.misc.build_from_crawler`.
+
+That includes the classes that you may assign to the following settings:
+
+-   :setting:`ADDONS`
+
+-   :setting:`DNS_RESOLVER`
+
+-   :setting:`DOWNLOAD_HANDLERS`
+
+-   :setting:`DOWNLOADER_CLIENTCONTEXTFACTORY`
+
+-   :setting:`DOWNLOADER_MIDDLEWARES`
+
+-   :setting:`DUPEFILTER_CLASS`
+
+-   :setting:`EXTENSIONS`
+
+-   :setting:`FEED_EXPORTERS`
+
+-   :setting:`FEED_STORAGES`
+
+-   :setting:`ITEM_PIPELINES`
+
+-   :setting:`SCHEDULER`
+
+-   :setting:`SCHEDULER_DISK_QUEUE`
+
+-   :setting:`SCHEDULER_MEMORY_QUEUE`
+
+-   :setting:`SCHEDULER_PRIORITY_QUEUE`
+
+-   :setting:`SCHEDULER_START_DISK_QUEUE`
+
+-   :setting:`SCHEDULER_START_MEMORY_QUEUE`
+
+-   :setting:`SPIDER_MIDDLEWARES`
+
+Third-party Scrapy components may also let you define additional Scrapy
+components, usually configurable through :ref:`settings <topics-settings>`, to
+modify their behavior.
+
+.. _from-crawler:
+
+Initializing from the crawler
+=============================
+
+Any Scrapy component may optionally define the following class method:
+
+.. classmethod:: from_crawler(cls, crawler: scrapy.crawler.Crawler, *args, **kwargs)
+
+    Return an instance of the component based on *crawler*.
+
+    *args* and *kwargs* are component-specific arguments that some components
+    receive. However, most components do not get any arguments, and instead
+    :ref:`use settings <component-settings>`.
+
+    If a component class defines this method, this class method is called to
+    create any instance of the component.
+
+    The *crawler* object provides access to all Scrapy core components like
+    :ref:`settings <topics-settings>` and :ref:`signals <topics-signals>`,
+    allowing the component to access them and hook its functionality into
+    Scrapy.
+
+.. _component-settings:
+
+Settings
+========
+
+Components can be configured through :ref:`settings <topics-settings>`.
+
+Components can read any setting from the
+:attr:`~scrapy.crawler.Crawler.settings` attribute of the
+:class:`~scrapy.crawler.Crawler` object they can :ref:`get for initialization
+<from-crawler>`. That includes both built-in and custom settings.
+
+For example:
+
+.. code-block:: python
+
+    class MyExtension:
+        @classmethod
+        def from_crawler(cls, crawler):
+            settings = crawler.settings
+            return cls(settings.getbool("LOG_ENABLED"))
+
+        def __init__(self, log_is_enabled=False):
+            if log_is_enabled:
+                print("log is enabled!")
+
+Components do not need to declare their custom settings programmatically.
+However, they should document them, so that users know they exist and how to
+use them.
+
+It is a good practice to prefix custom settings with the name of the component,
+to avoid collisions with custom settings of other existing (or future)
+components. For example, an extension called ``WarcCaching`` could prefix its
+custom settings with ``WARC_CACHING_``.
+
+Another good practice, mainly for components meant for :ref:`component priority
+dictionaries <component-priority-dictionaries>`, is to provide a boolean setting
+called ``<PREFIX>_ENABLED`` (e.g. ``WARC_CACHING_ENABLED``) to allow toggling
+that component on and off without changing the component priority dictionary
+setting. You can usually check the value of such a setting during
+initialization, and if ``False``, raise
+:exc:`~scrapy.exceptions.NotConfigured`.
+
+When choosing a name for a custom setting, it is also a good idea to have a
+look at the names of :ref:`built-in settings <topics-settings-ref>`, to try to
+maintain consistency with them.
+
+.. _enforce-component-requirements:
+
+Enforcing requirements
+======================
+
+Sometimes, your components may only be intended to work under certain
+conditions. For example, they may require a minimum version of Scrapy to work as
+intended, or they may require certain settings to have specific values.
+
+In addition to describing those conditions in the documentation of your
+component, it is a good practice to raise an exception from the ``__init__``
+method of your component if those conditions are not met at run time.
+
+In the case of :ref:`downloader middlewares <topics-downloader-middleware>`,
+:ref:`extensions <topics-extensions>`, :ref:`item pipelines
+<topics-item-pipeline>`, and :ref:`spider middlewares
+<topics-spider-middleware>`, you should raise
+:exc:`~scrapy.exceptions.NotConfigured`, passing a description of the issue as
+a parameter to the exception so that it is printed in the logs, for the user to
+see. For other components, feel free to raise whatever other exception feels
+right to you; for example, :exc:`RuntimeError` would make sense for a Scrapy
+version mismatch, while :exc:`ValueError` may be better if the issue is the
+value of a setting.
+
+If your requirement is a minimum Scrapy version, you may use
+:attr:`scrapy.__version__` to enforce your requirement. For example:
+
+.. code-block:: python
+
+    from packaging.version import parse as parse_version
+
+    import scrapy
+
+
+    class MyComponent:
+        def __init__(self):
+            if parse_version(scrapy.__version__) < parse_version("2.7"):
+                raise RuntimeError(
+                    f"{MyComponent.__qualname__} requires Scrapy 2.7 or "
+                    f"later, which allow defining the process_spider_output "
+                    f"method of spider middlewares as an asynchronous "
+                    f"generator."
+                )
+
+API reference
+=============
+
+The following function can be used to create an instance of a component class:
+
+.. autofunction:: scrapy.utils.misc.build_from_crawler
+
+The following function can also be useful when implementing a component, to
+report the import path of the component class, e.g. when reporting problems:
+
+.. autofunction:: scrapy.utils.python.global_object_name
+
+
+--- END OF components_组件.txt ---
+

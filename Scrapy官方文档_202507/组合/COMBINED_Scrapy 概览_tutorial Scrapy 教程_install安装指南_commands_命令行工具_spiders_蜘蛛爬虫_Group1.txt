@@ -1,0 +1,2875 @@
+.. _intro-overview:
+
+==================
+Scrapy at a glance
+==================
+
+Scrapy (/ˈskreɪpaɪ/) is an application framework for crawling web sites and extracting
+structured data which can be used for a wide range of useful applications, like
+data mining, information processing or historical archival.
+
+Even though Scrapy was originally designed for `web scraping`_, it can also be
+used to extract data using APIs (such as `Amazon Associates Web Services`_) or
+as a general purpose web crawler.
+
+
+Walk-through of an example spider
+=================================
+
+In order to show you what Scrapy brings to the table, we'll walk you through an
+example of a Scrapy Spider using the simplest way to run a spider.
+
+Here's the code for a spider that scrapes famous quotes from website
+https://quotes.toscrape.com, following the pagination:
+
+.. code-block:: python
+
+    import scrapy
+
+
+    class QuotesSpider(scrapy.Spider):
+        name = "quotes"
+        start_urls = [
+            "https://quotes.toscrape.com/tag/humor/",
+        ]
+
+        def parse(self, response):
+            for quote in response.css("div.quote"):
+                yield {
+                    "author": quote.xpath("span/small/text()").get(),
+                    "text": quote.css("span.text::text").get(),
+                }
+
+            next_page = response.css('li.next a::attr("href")').get()
+            if next_page is not None:
+                yield response.follow(next_page, self.parse)
+
+Put this in a text file, name it something like ``quotes_spider.py``
+and run the spider using the :command:`runspider` command::
+
+    scrapy runspider quotes_spider.py -o quotes.jsonl
+
+When this finishes you will have in the ``quotes.jsonl`` file a list of the
+quotes in JSON Lines format, containing the text and author, which will look like this::
+
+    {"author": "Jane Austen", "text": "\u201cThe person, be it gentleman or lady, who has not pleasure in a good novel, must be intolerably stupid.\u201d"}
+    {"author": "Steve Martin", "text": "\u201cA day without sunshine is like, you know, night.\u201d"}
+    {"author": "Garrison Keillor", "text": "\u201cAnyone who thinks sitting in church can make you a Christian must also think that sitting in a garage can make you a car.\u201d"}
+    ...
+
+
+What just happened?
+-------------------
+
+When you ran the command ``scrapy runspider quotes_spider.py``, Scrapy looked for a
+Spider definition inside it and ran it through its crawler engine.
+
+The crawl started by making requests to the URLs defined in the ``start_urls``
+attribute (in this case, only the URL for quotes in the *humor* category)
+and called the default callback method ``parse``, passing the response object as
+an argument. In the ``parse`` callback, we loop through the quote elements
+using a CSS Selector, yield a Python dict with the extracted quote text and author,
+look for a link to the next page and schedule another request using the same
+``parse`` method as callback.
+
+Here you will notice one of the main advantages of Scrapy: requests are
+:ref:`scheduled and processed asynchronously <topics-architecture>`.  This
+means that Scrapy doesn't need to wait for a request to be finished and
+processed, it can send another request or do other things in the meantime. This
+also means that other requests can keep going even if a request fails or an
+error happens while handling it.
+
+While this enables you to do very fast crawls (sending multiple concurrent
+requests at the same time, in a fault-tolerant way) Scrapy also gives you
+control over the politeness of the crawl through :ref:`a few settings
+<topics-settings-ref>`. You can do things like setting a download delay between
+each request, limiting the amount of concurrent requests per domain or per IP, and
+even :ref:`using an auto-throttling extension <topics-autothrottle>` that tries
+to figure these settings out automatically.
+
+.. note::
+
+    This is using :ref:`feed exports <topics-feed-exports>` to generate the
+    JSON file, you can easily change the export format (XML or CSV, for example) or the
+    storage backend (FTP or `Amazon S3`_, for example).  You can also write an
+    :ref:`item pipeline <topics-item-pipeline>` to store the items in a database.
+
+
+.. _topics-whatelse:
+
+What else?
+==========
+
+You've seen how to extract and store items from a website using Scrapy, but
+this is just the surface. Scrapy provides a lot of powerful features for making
+scraping easy and efficient, such as:
+
+* Built-in support for :ref:`selecting and extracting <topics-selectors>` data
+  from HTML/XML sources using extended CSS selectors and XPath expressions,
+  with helper methods for extraction using regular expressions.
+
+* An :ref:`interactive shell console <topics-shell>` (IPython aware) for trying
+  out the CSS and XPath expressions to scrape data, which is very useful when writing or
+  debugging your spiders.
+
+* Built-in support for :ref:`generating feed exports <topics-feed-exports>` in
+  multiple formats (JSON, CSV, XML) and storing them in multiple backends (FTP,
+  S3, local filesystem)
+
+* Robust encoding support and auto-detection, for dealing with foreign,
+  non-standard and broken encoding declarations.
+
+* :ref:`Strong extensibility support <extending-scrapy>`, allowing you to plug
+  in your own functionality using :ref:`signals <topics-signals>` and a
+  well-defined API (middlewares, :ref:`extensions <topics-extensions>`, and
+  :ref:`pipelines <topics-item-pipeline>`).
+
+* A wide range of built-in extensions and middlewares for handling:
+
+  - cookies and session handling
+  - HTTP features like compression, authentication, caching
+  - user-agent spoofing
+  - robots.txt
+  - crawl depth restriction
+  - and more
+
+* A :ref:`Telnet console <topics-telnetconsole>` for hooking into a Python
+  console running inside your Scrapy process, to introspect and debug your
+  crawler
+
+* Plus other goodies like reusable spiders to crawl sites from `Sitemaps`_ and
+  XML/CSV feeds, a media pipeline for :ref:`automatically downloading images
+  <topics-media-pipeline>` (or any other media) associated with the scraped
+  items, a caching DNS resolver, and much more!
+
+What's next?
+============
+
+The next steps for you are to :ref:`install Scrapy <intro-install>`,
+:ref:`follow through the tutorial <intro-tutorial>` to learn how to create
+a full-blown Scrapy project and `join the community`_. Thanks for your
+interest!
+
+.. _join the community: https://scrapy.org/community/
+.. _web scraping: https://en.wikipedia.org/wiki/Web_scraping
+.. _Amazon Associates Web Services: https://affiliate-program.amazon.com/welcome/ecs
+.. _Amazon S3: https://aws.amazon.com/s3/
+.. _Sitemaps: https://www.sitemaps.org/index.html
+
+
+--- END OF Scrapy 概览.txt ---
+
+.. _intro-tutorial:
+
+===============
+Scrapy Tutorial
+===============
+
+In this tutorial, we'll assume that Scrapy is already installed on your system.
+If that's not the case, see :ref:`intro-install`.
+
+We are going to scrape `quotes.toscrape.com <https://quotes.toscrape.com/>`_, a website
+that lists quotes from famous authors.
+
+This tutorial will walk you through these tasks:
+
+1. Creating a new Scrapy project
+2. Writing a :ref:`spider <topics-spiders>` to crawl a site and extract data
+3. Exporting the scraped data using the command line
+4. Changing spider to recursively follow links
+5. Using spider arguments
+
+Scrapy is written in Python_. The more you learn about Python, the more you
+can get out of Scrapy.
+
+If you're already familiar with other languages and want to learn Python quickly, the
+`Python Tutorial`_ is a good resource.
+
+If you're new to programming and want to start with Python, the following books
+may be useful to you:
+
+* `Automate the Boring Stuff With Python`_
+
+* `How To Think Like a Computer Scientist`_
+
+* `Learn Python 3 The Hard Way`_
+
+You can also take a look at `this list of Python resources for non-programmers`_,
+as well as the `suggested resources in the learnpython-subreddit`_.
+
+.. _Python: https://www.python.org/
+.. _this list of Python resources for non-programmers: https://wiki.python.org/moin/BeginnersGuide/NonProgrammers
+.. _Python Tutorial: https://docs.python.org/3/tutorial
+.. _Automate the Boring Stuff With Python: https://automatetheboringstuff.com/
+.. _How To Think Like a Computer Scientist: http://openbookproject.net/thinkcs/python/english3e/
+.. _Learn Python 3 The Hard Way: https://learnpythonthehardway.org/python3/
+.. _suggested resources in the learnpython-subreddit: https://www.reddit.com/r/learnpython/wiki/index#wiki_new_to_python.3F
+
+
+Creating a project
+==================
+
+Before you start scraping, you will have to set up a new Scrapy project. Enter a
+directory where you'd like to store your code and run::
+
+    scrapy startproject tutorial
+
+This will create a ``tutorial`` directory with the following contents::
+
+    tutorial/
+        scrapy.cfg            # deploy configuration file
+
+        tutorial/             # project's Python module, you'll import your code from here
+            __init__.py
+
+            items.py          # project items definition file
+
+            middlewares.py    # project middlewares file
+
+            pipelines.py      # project pipelines file
+
+            settings.py       # project settings file
+
+            spiders/          # a directory where you'll later put your spiders
+                __init__.py
+
+
+Our first Spider
+================
+
+Spiders are classes that you define and that Scrapy uses to scrape information from a website
+(or a group of websites). They must subclass :class:`~scrapy.Spider` and define the initial
+requests to be made, and optionally, how to follow links in pages and parse the downloaded
+page content to extract data.
+
+This is the code for our first Spider. Save it in a file named
+``quotes_spider.py`` under the ``tutorial/spiders`` directory in your project:
+
+.. code-block:: python
+
+    from pathlib import Path
+
+    import scrapy
+
+
+    class QuotesSpider(scrapy.Spider):
+        name = "quotes"
+
+        async def start(self):
+            urls = [
+                "https://quotes.toscrape.com/page/1/",
+                "https://quotes.toscrape.com/page/2/",
+            ]
+            for url in urls:
+                yield scrapy.Request(url=url, callback=self.parse)
+
+        def parse(self, response):
+            page = response.url.split("/")[-2]
+            filename = f"quotes-{page}.html"
+            Path(filename).write_bytes(response.body)
+            self.log(f"Saved file {filename}")
+
+
+As you can see, our Spider subclasses :class:`scrapy.Spider <scrapy.Spider>`
+and defines some attributes and methods:
+
+* :attr:`~scrapy.Spider.name`: identifies the Spider. It must be
+  unique within a project, that is, you can't set the same name for different
+  Spiders.
+
+* :meth:`~scrapy.Spider.start`: must be an asynchronous generator that
+  yields requests (and, optionally, items) for the spider to start crawling.
+  Subsequent requests will be generated successively from these initial
+  requests.
+
+* :meth:`~scrapy.Spider.parse`: a method that will be called to handle
+  the response downloaded for each of the requests made. The response parameter
+  is an instance of :class:`~scrapy.http.TextResponse` that holds
+  the page content and has further helpful methods to handle it.
+
+  The :meth:`~scrapy.Spider.parse` method usually parses the response, extracting
+  the scraped data as dicts and also finding new URLs to
+  follow and creating new requests (:class:`~scrapy.Request`) from them.
+
+How to run our spider
+---------------------
+
+To put our spider to work, go to the project's top level directory and run::
+
+   scrapy crawl quotes
+
+This command runs the spider named ``quotes`` that we've just added, that
+will send some requests for the ``quotes.toscrape.com`` domain. You will get an output
+similar to this::
+
+    ... (omitted for brevity)
+    2016-12-16 21:24:05 [scrapy.core.engine] INFO: Spider opened
+    2016-12-16 21:24:05 [scrapy.extensions.logstats] INFO: Crawled 0 pages (at 0 pages/min), scraped 0 items (at 0 items/min)
+    2016-12-16 21:24:05 [scrapy.extensions.telnet] DEBUG: Telnet console listening on 127.0.0.1:6023
+    2016-12-16 21:24:05 [scrapy.core.engine] DEBUG: Crawled (404) <GET https://quotes.toscrape.com/robots.txt> (referer: None)
+    2016-12-16 21:24:05 [scrapy.core.engine] DEBUG: Crawled (200) <GET https://quotes.toscrape.com/page/1/> (referer: None)
+    2016-12-16 21:24:05 [scrapy.core.engine] DEBUG: Crawled (200) <GET https://quotes.toscrape.com/page/2/> (referer: None)
+    2016-12-16 21:24:05 [quotes] DEBUG: Saved file quotes-1.html
+    2016-12-16 21:24:05 [quotes] DEBUG: Saved file quotes-2.html
+    2016-12-16 21:24:05 [scrapy.core.engine] INFO: Closing spider (finished)
+    ...
+
+Now, check the files in the current directory. You should notice that two new
+files have been created: *quotes-1.html* and *quotes-2.html*, with the content
+for the respective URLs, as our ``parse`` method instructs.
+
+.. note:: If you are wondering why we haven't parsed the HTML yet, hold
+  on, we will cover that soon.
+
+
+What just happened under the hood?
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Scrapy sends the first :class:`scrapy.Request <scrapy.Request>` objects yielded
+by the :meth:`~scrapy.Spider.start` spider method. Upon receiving a
+response for each one, Scrapy calls the callback method associated with the
+request (in this case, the ``parse`` method) with a
+:class:`~scrapy.http.Response` object.
+
+
+A shortcut to the ``start`` method
+----------------------------------
+
+Instead of implementing a :meth:`~scrapy.Spider.start` method that yields
+:class:`~scrapy.Request` objects from URLs, you can define a
+:attr:`~scrapy.Spider.start_urls` class attribute with a list of URLs. This
+list will then be used by the default implementation of
+:meth:`~scrapy.Spider.start` to create the initial requests for your
+spider.
+
+.. code-block:: python
+
+    from pathlib import Path
+
+    import scrapy
+
+
+    class QuotesSpider(scrapy.Spider):
+        name = "quotes"
+        start_urls = [
+            "https://quotes.toscrape.com/page/1/",
+            "https://quotes.toscrape.com/page/2/",
+        ]
+
+        def parse(self, response):
+            page = response.url.split("/")[-2]
+            filename = f"quotes-{page}.html"
+            Path(filename).write_bytes(response.body)
+
+The :meth:`~scrapy.Spider.parse` method will be called to handle each
+of the requests for those URLs, even though we haven't explicitly told Scrapy
+to do so. This happens because :meth:`~scrapy.Spider.parse` is Scrapy's
+default callback method, which is called for requests without an explicitly
+assigned callback.
+
+
+Extracting data
+---------------
+
+The best way to learn how to extract data with Scrapy is trying selectors
+using the :ref:`Scrapy shell <topics-shell>`. Run::
+
+    scrapy shell 'https://quotes.toscrape.com/page/1/'
+
+.. note::
+
+   Remember to always enclose URLs in quotes when running Scrapy shell from the
+   command line, otherwise URLs containing arguments (i.e. ``&`` character)
+   will not work.
+
+   On Windows, use double quotes instead::
+
+       scrapy shell "https://quotes.toscrape.com/page/1/"
+
+You will see something like::
+
+    [ ... Scrapy log here ... ]
+    2016-09-19 12:09:27 [scrapy.core.engine] DEBUG: Crawled (200) <GET https://quotes.toscrape.com/page/1/> (referer: None)
+    [s] Available Scrapy objects:
+    [s]   scrapy     scrapy module (contains scrapy.Request, scrapy.Selector, etc)
+    [s]   crawler    <scrapy.crawler.Crawler object at 0x7fa91d888c90>
+    [s]   item       {}
+    [s]   request    <GET https://quotes.toscrape.com/page/1/>
+    [s]   response   <200 https://quotes.toscrape.com/page/1/>
+    [s]   settings   <scrapy.settings.Settings object at 0x7fa91d888c10>
+    [s]   spider     <DefaultSpider 'default' at 0x7fa91c8af990>
+    [s] Useful shortcuts:
+    [s]   shelp()           Shell help (print this help)
+    [s]   fetch(req_or_url) Fetch request (or URL) and update local objects
+    [s]   view(response)    View response in a browser
+
+Using the shell, you can try selecting elements using `CSS`_ with the response
+object:
+
+.. invisible-code-block: python
+
+    response = load_response('https://quotes.toscrape.com/page/1/', 'quotes1.html')
+
+.. code-block:: pycon
+
+    >>> response.css("title")
+    [<Selector query='descendant-or-self::title' data='<title>Quotes to Scrape</title>'>]
+
+The result of running ``response.css('title')`` is a list-like object called
+:class:`~scrapy.selector.SelectorList`, which represents a list of
+:class:`~scrapy.Selector` objects that wrap around XML/HTML elements
+and allow you to run further queries to refine the selection or extract the
+data.
+
+To extract the text from the title above, you can do:
+
+.. code-block:: pycon
+
+    >>> response.css("title::text").getall()
+    ['Quotes to Scrape']
+
+There are two things to note here: one is that we've added ``::text`` to the
+CSS query, to mean we want to select only the text elements directly inside
+``<title>`` element.  If we don't specify ``::text``, we'd get the full title
+element, including its tags:
+
+.. code-block:: pycon
+
+    >>> response.css("title").getall()
+    ['<title>Quotes to Scrape</title>']
+
+The other thing is that the result of calling ``.getall()`` is a list: it is
+possible that a selector returns more than one result, so we extract them all.
+When you know you just want the first result, as in this case, you can do:
+
+.. code-block:: pycon
+
+    >>> response.css("title::text").get()
+    'Quotes to Scrape'
+
+As an alternative, you could've written:
+
+.. code-block:: pycon
+
+    >>> response.css("title::text")[0].get()
+    'Quotes to Scrape'
+
+Accessing an index on a :class:`~scrapy.selector.SelectorList` instance will
+raise an :exc:`IndexError` exception if there are no results:
+
+.. code-block:: pycon
+
+    >>> response.css("noelement")[0].get()
+    Traceback (most recent call last):
+    ...
+    IndexError: list index out of range
+
+You might want to use ``.get()`` directly on the
+:class:`~scrapy.selector.SelectorList` instance instead, which returns ``None``
+if there are no results:
+
+.. code-block:: pycon
+
+    >>> response.css("noelement").get()
+
+There's a lesson here: for most scraping code, you want it to be resilient to
+errors due to things not being found on a page, so that even if some parts fail
+to be scraped, you can at least get **some** data.
+
+Besides the :meth:`~scrapy.selector.SelectorList.getall` and
+:meth:`~scrapy.selector.SelectorList.get` methods, you can also use
+the :meth:`~scrapy.selector.SelectorList.re` method to extract using
+:doc:`regular expressions <library/re>`:
+
+.. code-block:: pycon
+
+    >>> response.css("title::text").re(r"Quotes.*")
+    ['Quotes to Scrape']
+    >>> response.css("title::text").re(r"Q\w+")
+    ['Quotes']
+    >>> response.css("title::text").re(r"(\w+) to (\w+)")
+    ['Quotes', 'Scrape']
+
+In order to find the proper CSS selectors to use, you might find it useful to open
+the response page from the shell in your web browser using ``view(response)``.
+You can use your browser's developer tools to inspect the HTML and come up
+with a selector (see :ref:`topics-developer-tools`).
+
+`Selector Gadget`_ is also a nice tool to quickly find CSS selector for
+visually selected elements, which works in many browsers.
+
+.. _Selector Gadget: https://selectorgadget.com/
+
+
+XPath: a brief intro
+^^^^^^^^^^^^^^^^^^^^
+
+Besides `CSS`_, Scrapy selectors also support using `XPath`_ expressions:
+
+.. code-block:: pycon
+
+    >>> response.xpath("//title")
+    [<Selector query='//title' data='<title>Quotes to Scrape</title>'>]
+    >>> response.xpath("//title/text()").get()
+    'Quotes to Scrape'
+
+XPath expressions are very powerful, and are the foundation of Scrapy
+Selectors. In fact, CSS selectors are converted to XPath under-the-hood. You
+can see that if you read the text representation of the selector
+objects in the shell closely.
+
+While perhaps not as popular as CSS selectors, XPath expressions offer more
+power because besides navigating the structure, it can also look at the
+content. Using XPath, you're able to select things like: *the link
+that contains the text "Next Page"*. This makes XPath very fitting to the task
+of scraping, and we encourage you to learn XPath even if you already know how to
+construct CSS selectors, it will make scraping much easier.
+
+We won't cover much of XPath here, but you can read more about :ref:`using XPath
+with Scrapy Selectors here <topics-selectors>`. To learn more about XPath, we
+recommend `this tutorial to learn XPath through examples
+<http://zvon.org/comp/r/tut-XPath_1.html>`_, and `this tutorial to learn "how
+to think in XPath" <http://plasmasturm.org/log/xpath101/>`_.
+
+.. _XPath: https://www.w3.org/TR/xpath-10/
+.. _CSS: https://www.w3.org/TR/selectors
+
+Extracting quotes and authors
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Now that you know a bit about selection and extraction, let's complete our
+spider by writing the code to extract the quotes from the web page.
+
+Each quote in https://quotes.toscrape.com is represented by HTML elements that look
+like this:
+
+.. code-block:: html
+
+    <div class="quote">
+        <span class="text">“The world as we have created it is a process of our
+        thinking. It cannot be changed without changing our thinking.”</span>
+        <span>
+            by <small class="author">Albert Einstein</small>
+            <a href="/author/Albert-Einstein">(about)</a>
+        </span>
+        <div class="tags">
+            Tags:
+            <a class="tag" href="/tag/change/page/1/">change</a>
+            <a class="tag" href="/tag/deep-thoughts/page/1/">deep-thoughts</a>
+            <a class="tag" href="/tag/thinking/page/1/">thinking</a>
+            <a class="tag" href="/tag/world/page/1/">world</a>
+        </div>
+    </div>
+
+Let's open up scrapy shell and play a bit to find out how to extract the data
+we want::
+
+    scrapy shell 'https://quotes.toscrape.com'
+
+We get a list of selectors for the quote HTML elements with:
+
+.. code-block:: pycon
+
+    >>> response.css("div.quote")
+    [<Selector query="descendant-or-self::div[@class and contains(concat(' ', normalize-space(@class), ' '), ' quote ')]" data='<div class="quote" itemscope itemtype...'>,
+    <Selector query="descendant-or-self::div[@class and contains(concat(' ', normalize-space(@class), ' '), ' quote ')]" data='<div class="quote" itemscope itemtype...'>,
+    ...]
+
+Each of the selectors returned by the query above allows us to run further
+queries over their sub-elements. Let's assign the first selector to a
+variable, so that we can run our CSS selectors directly on a particular quote:
+
+.. code-block:: pycon
+
+    >>> quote = response.css("div.quote")[0]
+
+Now, let's extract the ``text``, ``author`` and ``tags`` from that quote
+using the ``quote`` object we just created:
+
+.. code-block:: pycon
+
+    >>> text = quote.css("span.text::text").get()
+    >>> text
+    '“The world as we have created it is a process of our thinking. It cannot be changed without changing our thinking.”'
+    >>> author = quote.css("small.author::text").get()
+    >>> author
+    'Albert Einstein'
+
+Given that the tags are a list of strings, we can use the ``.getall()`` method
+to get all of them:
+
+.. code-block:: pycon
+
+    >>> tags = quote.css("div.tags a.tag::text").getall()
+    >>> tags
+    ['change', 'deep-thoughts', 'thinking', 'world']
+
+.. invisible-code-block: python
+
+  from sys import version_info
+
+Having figured out how to extract each bit, we can now iterate over all the
+quote elements and put them together into a Python dictionary:
+
+.. code-block:: pycon
+
+    >>> for quote in response.css("div.quote"):
+    ...     text = quote.css("span.text::text").get()
+    ...     author = quote.css("small.author::text").get()
+    ...     tags = quote.css("div.tags a.tag::text").getall()
+    ...     print(dict(text=text, author=author, tags=tags))
+    ...
+    {'text': '“The world as we have created it is a process of our thinking. It cannot be changed without changing our thinking.”', 'author': 'Albert Einstein', 'tags': ['change', 'deep-thoughts', 'thinking', 'world']}
+    {'text': '“It is our choices, Harry, that show what we truly are, far more than our abilities.”', 'author': 'J.K. Rowling', 'tags': ['abilities', 'choices']}
+    ...
+
+Extracting data in our spider
+-----------------------------
+
+Let's get back to our spider. Until now, it hasn't extracted any data in
+particular, just saving the whole HTML page to a local file. Let's integrate the
+extraction logic above into our spider.
+
+A Scrapy spider typically generates many dictionaries containing the data
+extracted from the page. To do that, we use the ``yield`` Python keyword
+in the callback, as you can see below:
+
+.. code-block:: python
+
+    import scrapy
+
+
+    class QuotesSpider(scrapy.Spider):
+        name = "quotes"
+        start_urls = [
+            "https://quotes.toscrape.com/page/1/",
+            "https://quotes.toscrape.com/page/2/",
+        ]
+
+        def parse(self, response):
+            for quote in response.css("div.quote"):
+                yield {
+                    "text": quote.css("span.text::text").get(),
+                    "author": quote.css("small.author::text").get(),
+                    "tags": quote.css("div.tags a.tag::text").getall(),
+                }
+
+To run this spider, exit the scrapy shell by entering::
+
+    quit()
+
+Then, run::
+
+   scrapy crawl quotes
+
+Now, it should output the extracted data with the log::
+
+    2016-09-19 18:57:19 [scrapy.core.scraper] DEBUG: Scraped from <200 https://quotes.toscrape.com/page/1/>
+    {'tags': ['life', 'love'], 'author': 'André Gide', 'text': '“It is better to be hated for what you are than to be loved for what you are not.”'}
+    2016-09-19 18:57:19 [scrapy.core.scraper] DEBUG: Scraped from <200 https://quotes.toscrape.com/page/1/>
+    {'tags': ['edison', 'failure', 'inspirational', 'paraphrased'], 'author': 'Thomas A. Edison', 'text': "“I have not failed. I've just found 10,000 ways that won't work.”"}
+
+
+.. _storing-data:
+
+Storing the scraped data
+========================
+
+The simplest way to store the scraped data is by using :ref:`Feed exports
+<topics-feed-exports>`, with the following command::
+
+    scrapy crawl quotes -O quotes.json
+
+That will generate a ``quotes.json`` file containing all scraped items,
+serialized in `JSON`_.
+
+The ``-O`` command-line switch overwrites any existing file; use ``-o`` instead
+to append new content to any existing file. However, appending to a JSON file
+makes the file contents invalid JSON. When appending to a file, consider
+using a different serialization format, such as `JSON Lines`_::
+
+    scrapy crawl quotes -o quotes.jsonl
+
+The `JSON Lines`_ format is useful because it's stream-like, so you can easily
+append new records to it. It doesn't have the same problem as JSON when you run
+twice. Also, as each record is a separate line, you can process big files
+without having to fit everything in memory, there are tools like `JQ`_ to help
+do that at the command-line.
+
+In small projects (like the one in this tutorial), that should be enough.
+However, if you want to perform more complex things with the scraped items, you
+can write an :ref:`Item Pipeline <topics-item-pipeline>`. A placeholder file
+for Item Pipelines has been set up for you when the project is created, in
+``tutorial/pipelines.py``. Though you don't need to implement any item
+pipelines if you just want to store the scraped items.
+
+.. _JSON Lines: https://jsonlines.org
+.. _JQ: https://stedolan.github.io/jq
+
+
+Following links
+===============
+
+Let's say, instead of just scraping the stuff from the first two pages
+from https://quotes.toscrape.com, you want quotes from all the pages in the website.
+
+Now that you know how to extract data from pages, let's see how to follow links
+from them.
+
+The first thing to do is extract the link to the page we want to follow.  Examining
+our page, we can see there is a link to the next page with the following
+markup:
+
+.. code-block:: html
+
+    <ul class="pager">
+        <li class="next">
+            <a href="/page/2/">Next <span aria-hidden="true">&rarr;</span></a>
+        </li>
+    </ul>
+
+We can try extracting it in the shell:
+
+>>> response.css('li.next a').get()
+'<a href="/page/2/">Next <span aria-hidden="true">→</span></a>'
+
+This gets the anchor element, but we want the attribute ``href``. For that,
+Scrapy supports a CSS extension that lets you select the attribute contents,
+like this:
+
+.. code-block:: pycon
+
+    >>> response.css("li.next a::attr(href)").get()
+    '/page/2/'
+
+There is also an ``attrib`` property available
+(see :ref:`selecting-attributes` for more):
+
+.. code-block:: pycon
+
+    >>> response.css("li.next a").attrib["href"]
+    '/page/2/'
+
+Now let's see our spider, modified to recursively follow the link to the next
+page, extracting data from it:
+
+.. code-block:: python
+
+    import scrapy
+
+
+    class QuotesSpider(scrapy.Spider):
+        name = "quotes"
+        start_urls = [
+            "https://quotes.toscrape.com/page/1/",
+        ]
+
+        def parse(self, response):
+            for quote in response.css("div.quote"):
+                yield {
+                    "text": quote.css("span.text::text").get(),
+                    "author": quote.css("small.author::text").get(),
+                    "tags": quote.css("div.tags a.tag::text").getall(),
+                }
+
+            next_page = response.css("li.next a::attr(href)").get()
+            if next_page is not None:
+                next_page = response.urljoin(next_page)
+                yield scrapy.Request(next_page, callback=self.parse)
+
+
+Now, after extracting the data, the ``parse()`` method looks for the link to
+the next page, builds a full absolute URL using the
+:meth:`~scrapy.http.Response.urljoin` method (since the links can be
+relative) and yields a new request to the next page, registering itself as
+callback to handle the data extraction for the next page and to keep the
+crawling going through all the pages.
+
+What you see here is Scrapy's mechanism of following links: when you yield
+a Request in a callback method, Scrapy will schedule that request to be sent
+and register a callback method to be executed when that request finishes.
+
+Using this, you can build complex crawlers that follow links according to rules
+you define, and extract different kinds of data depending on the page it's
+visiting.
+
+In our example, it creates a sort of loop, following all the links to the next page
+until it doesn't find one -- handy for crawling blogs, forums and other sites with
+pagination.
+
+
+.. _response-follow-example:
+
+A shortcut for creating Requests
+--------------------------------
+
+As a shortcut for creating Request objects you can use
+:meth:`response.follow <scrapy.http.TextResponse.follow>`:
+
+.. code-block:: python
+
+    import scrapy
+
+
+    class QuotesSpider(scrapy.Spider):
+        name = "quotes"
+        start_urls = [
+            "https://quotes.toscrape.com/page/1/",
+        ]
+
+        def parse(self, response):
+            for quote in response.css("div.quote"):
+                yield {
+                    "text": quote.css("span.text::text").get(),
+                    "author": quote.css("span small::text").get(),
+                    "tags": quote.css("div.tags a.tag::text").getall(),
+                }
+
+            next_page = response.css("li.next a::attr(href)").get()
+            if next_page is not None:
+                yield response.follow(next_page, callback=self.parse)
+
+Unlike scrapy.Request, ``response.follow`` supports relative URLs directly - no
+need to call urljoin. Note that ``response.follow`` just returns a Request
+instance; you still have to yield this Request.
+
+.. skip: start
+
+You can also pass a selector to ``response.follow`` instead of a string;
+this selector should extract necessary attributes:
+
+.. code-block:: python
+
+    for href in response.css("ul.pager a::attr(href)"):
+        yield response.follow(href, callback=self.parse)
+
+For ``<a>`` elements there is a shortcut: ``response.follow`` uses their href
+attribute automatically. So the code can be shortened further:
+
+.. code-block:: python
+
+    for a in response.css("ul.pager a"):
+        yield response.follow(a, callback=self.parse)
+
+To create multiple requests from an iterable, you can use
+:meth:`response.follow_all <scrapy.http.TextResponse.follow_all>` instead:
+
+.. code-block:: python
+
+    anchors = response.css("ul.pager a")
+    yield from response.follow_all(anchors, callback=self.parse)
+
+or, shortening it further:
+
+.. code-block:: python
+
+    yield from response.follow_all(css="ul.pager a", callback=self.parse)
+
+.. skip: end
+
+
+More examples and patterns
+--------------------------
+
+Here is another spider that illustrates callbacks and following links,
+this time for scraping author information:
+
+.. code-block:: python
+
+    import scrapy
+
+
+    class AuthorSpider(scrapy.Spider):
+        name = "author"
+
+        start_urls = ["https://quotes.toscrape.com/"]
+
+        def parse(self, response):
+            author_page_links = response.css(".author + a")
+            yield from response.follow_all(author_page_links, self.parse_author)
+
+            pagination_links = response.css("li.next a")
+            yield from response.follow_all(pagination_links, self.parse)
+
+        def parse_author(self, response):
+            def extract_with_css(query):
+                return response.css(query).get(default="").strip()
+
+            yield {
+                "name": extract_with_css("h3.author-title::text"),
+                "birthdate": extract_with_css(".author-born-date::text"),
+                "bio": extract_with_css(".author-description::text"),
+            }
+
+This spider will start from the main page, it will follow all the links to the
+authors pages calling the ``parse_author`` callback for each of them, and also
+the pagination links with the ``parse`` callback as we saw before.
+
+Here we're passing callbacks to
+:meth:`response.follow_all <scrapy.http.TextResponse.follow_all>` as positional
+arguments to make the code shorter; it also works for
+:class:`~scrapy.Request`.
+
+The ``parse_author`` callback defines a helper function to extract and cleanup the
+data from a CSS query and yields the Python dict with the author data.
+
+Another interesting thing this spider demonstrates is that, even if there are
+many quotes from the same author, we don't need to worry about visiting the
+same author page multiple times. By default, Scrapy filters out duplicated
+requests to URLs already visited, avoiding the problem of hitting servers too
+much because of a programming mistake. This can be configured in the
+:setting:`DUPEFILTER_CLASS` setting.
+
+Hopefully by now you have a good understanding of how to use the mechanism
+of following links and callbacks with Scrapy.
+
+As yet another example spider that leverages the mechanism of following links,
+check out the :class:`~scrapy.spiders.CrawlSpider` class for a generic
+spider that implements a small rules engine that you can use to write your
+crawlers on top of it.
+
+Also, a common pattern is to build an item with data from more than one page,
+using a :ref:`trick to pass additional data to the callbacks
+<topics-request-response-ref-request-callback-arguments>`.
+
+
+Using spider arguments
+======================
+
+You can provide command line arguments to your spiders by using the ``-a``
+option when running them::
+
+    scrapy crawl quotes -O quotes-humor.json -a tag=humor
+
+These arguments are passed to the Spider's ``__init__`` method and become
+spider attributes by default.
+
+In this example, the value provided for the ``tag`` argument will be available
+via ``self.tag``. You can use this to make your spider fetch only quotes
+with a specific tag, building the URL based on the argument:
+
+.. code-block:: python
+
+    import scrapy
+
+
+    class QuotesSpider(scrapy.Spider):
+        name = "quotes"
+
+        async def start(self):
+            url = "https://quotes.toscrape.com/"
+            tag = getattr(self, "tag", None)
+            if tag is not None:
+                url = url + "tag/" + tag
+            yield scrapy.Request(url, self.parse)
+
+        def parse(self, response):
+            for quote in response.css("div.quote"):
+                yield {
+                    "text": quote.css("span.text::text").get(),
+                    "author": quote.css("small.author::text").get(),
+                }
+
+            next_page = response.css("li.next a::attr(href)").get()
+            if next_page is not None:
+                yield response.follow(next_page, self.parse)
+
+
+If you pass the ``tag=humor`` argument to this spider, you'll notice that it
+will only visit URLs from the ``humor`` tag, such as
+``https://quotes.toscrape.com/tag/humor``.
+
+You can :ref:`learn more about handling spider arguments here <spiderargs>`.
+
+Next steps
+==========
+
+This tutorial covered only the basics of Scrapy, but there's a lot of other
+features not mentioned here. Check the :ref:`topics-whatelse` section in the
+:ref:`intro-overview` chapter for a quick overview of the most important ones.
+
+You can continue from the section :ref:`section-basics` to know more about the
+command-line tool, spiders, selectors and other things the tutorial hasn't covered like
+modeling the scraped data. If you'd prefer to play with an example project, check
+the :ref:`intro-examples` section.
+
+.. _JSON: https://en.wikipedia.org/wiki/JSON
+
+
+--- END OF tutorial Scrapy 教程.txt ---
+
+.. _intro-install:
+
+==================
+Installation guide
+==================
+
+.. _faq-python-versions:
+
+Supported Python versions
+=========================
+
+Scrapy requires Python 3.9+, either the CPython implementation (default) or
+the PyPy implementation (see :ref:`python:implementations`).
+
+.. _intro-install-scrapy:
+
+Installing Scrapy
+=================
+
+If you're using `Anaconda`_ or `Miniconda`_, you can install the package from
+the `conda-forge`_ channel, which has up-to-date packages for Linux, Windows
+and macOS.
+
+To install Scrapy using ``conda``, run::
+
+  conda install -c conda-forge scrapy
+
+Alternatively, if you’re already familiar with installation of Python packages,
+you can install Scrapy and its dependencies from PyPI with::
+
+    pip install Scrapy
+
+We strongly recommend that you install Scrapy in :ref:`a dedicated virtualenv <intro-using-virtualenv>`,
+to avoid conflicting with your system packages.
+
+Note that sometimes this may require solving compilation issues for some Scrapy
+dependencies depending on your operating system, so be sure to check the
+:ref:`intro-install-platform-notes`.
+
+For more detailed and platform-specific instructions, as well as
+troubleshooting information, read on.
+
+
+Things that are good to know
+----------------------------
+
+Scrapy is written in pure Python and depends on a few key Python packages (among others):
+
+* `lxml`_, an efficient XML and HTML parser
+* `parsel`_, an HTML/XML data extraction library written on top of lxml,
+* `w3lib`_, a multi-purpose helper for dealing with URLs and web page encodings
+* `twisted`_, an asynchronous networking framework
+* `cryptography`_ and `pyOpenSSL`_, to deal with various network-level security needs
+
+Some of these packages themselves depend on non-Python packages
+that might require additional installation steps depending on your platform.
+Please check :ref:`platform-specific guides below <intro-install-platform-notes>`.
+
+In case of any trouble related to these dependencies,
+please refer to their respective installation instructions:
+
+* `lxml installation`_
+* :doc:`cryptography installation <cryptography:installation>`
+
+.. _lxml installation: https://lxml.de/installation.html
+
+
+.. _intro-using-virtualenv:
+
+Using a virtual environment (recommended)
+-----------------------------------------
+
+TL;DR: We recommend installing Scrapy inside a virtual environment
+on all platforms.
+
+Python packages can be installed either globally (a.k.a system wide),
+or in user-space. We do not recommend installing Scrapy system wide.
+
+Instead, we recommend that you install Scrapy within a so-called
+"virtual environment" (:mod:`venv`).
+Virtual environments allow you to not conflict with already-installed Python
+system packages (which could break some of your system tools and scripts),
+and still install packages normally with ``pip`` (without ``sudo`` and the likes).
+
+See :ref:`tut-venv` on how to create your virtual environment.
+
+Once you have created a virtual environment, you can install Scrapy inside it with ``pip``,
+just like any other Python package.
+(See :ref:`platform-specific guides <intro-install-platform-notes>`
+below for non-Python dependencies that you may need to install beforehand).
+
+
+.. _intro-install-platform-notes:
+
+Platform specific installation notes
+====================================
+
+.. _intro-install-windows:
+
+Windows
+-------
+
+Though it's possible to install Scrapy on Windows using pip, we recommend you
+install `Anaconda`_ or `Miniconda`_ and use the package from the
+`conda-forge`_ channel, which will avoid most installation issues.
+
+Once you've installed `Anaconda`_ or `Miniconda`_, install Scrapy with::
+
+  conda install -c conda-forge scrapy
+
+To install Scrapy on Windows using ``pip``:
+
+.. warning::
+    This installation method requires “Microsoft Visual C++” for installing some
+    Scrapy dependencies, which demands significantly more disk space than Anaconda.
+
+#. Download and execute `Microsoft C++ Build Tools`_ to install the Visual Studio Installer.
+
+#. Run the Visual Studio Installer.
+
+#. Under the Workloads section, select **C++ build tools**.
+
+#. Check the installation details and make sure following packages are selected as optional components:
+
+    * **MSVC**  (e.g MSVC v142 - VS 2019 C++ x64/x86 build tools (v14.23) )
+
+    * **Windows SDK**  (e.g Windows 10 SDK (10.0.18362.0))
+
+#. Install the Visual Studio Build Tools.
+
+Now, you should be able to :ref:`install Scrapy <intro-install-scrapy>` using ``pip``.
+
+.. _intro-install-ubuntu:
+
+Ubuntu 14.04 or above
+---------------------
+
+Scrapy is currently tested with recent-enough versions of lxml,
+twisted and pyOpenSSL, and is compatible with recent Ubuntu distributions.
+But it should support older versions of Ubuntu too, like Ubuntu 14.04,
+albeit with potential issues with TLS connections.
+
+**Don't** use the ``python-scrapy`` package provided by Ubuntu, they are
+typically too old and slow to catch up with the latest Scrapy release.
+
+
+To install Scrapy on Ubuntu (or Ubuntu-based) systems, you need to install
+these dependencies::
+
+    sudo apt-get install python3 python3-dev python3-pip libxml2-dev libxslt1-dev zlib1g-dev libffi-dev libssl-dev
+
+- ``python3-dev``, ``zlib1g-dev``, ``libxml2-dev`` and ``libxslt1-dev``
+  are required for ``lxml``
+- ``libssl-dev`` and ``libffi-dev`` are required for ``cryptography``
+
+Inside a :ref:`virtualenv <intro-using-virtualenv>`,
+you can install Scrapy with ``pip`` after that::
+
+    pip install scrapy
+
+.. note::
+    The same non-Python dependencies can be used to install Scrapy in Debian
+    Jessie (8.0) and above.
+
+
+.. _intro-install-macos:
+
+macOS
+-----
+
+Building Scrapy's dependencies requires the presence of a C compiler and
+development headers. On macOS this is typically provided by Apple’s Xcode
+development tools. To install the Xcode command-line tools, open a terminal
+window and run::
+
+    xcode-select --install
+
+There's a `known issue <https://github.com/pypa/pip/issues/2468>`_ that
+prevents ``pip`` from updating system packages. This has to be addressed to
+successfully install Scrapy and its dependencies. Here are some proposed
+solutions:
+
+* *(Recommended)* **Don't** use system Python. Install a new, updated version
+  that doesn't conflict with the rest of your system. Here's how to do it using
+  the `homebrew`_ package manager:
+
+  * Install `homebrew`_ following the instructions in https://brew.sh/
+
+  * Update your ``PATH`` variable to state that homebrew packages should be
+    used before system packages (Change ``.bashrc`` to ``.zshrc`` accordingly
+    if you're using `zsh`_ as default shell)::
+
+      echo "export PATH=/usr/local/bin:/usr/local/sbin:$PATH" >> ~/.bashrc
+
+  * Reload ``.bashrc`` to ensure the changes have taken place::
+
+      source ~/.bashrc
+
+  * Install python::
+
+      brew install python
+
+*   *(Optional)* :ref:`Install Scrapy inside a Python virtual environment
+    <intro-using-virtualenv>`.
+
+  This method is a workaround for the above macOS issue, but it's an overall
+  good practice for managing dependencies and can complement the first method.
+
+After any of these workarounds you should be able to install Scrapy::
+
+  pip install Scrapy
+
+
+PyPy
+----
+
+We recommend using the latest PyPy version.
+For PyPy3, only Linux installation was tested.
+
+Most Scrapy dependencies now have binary wheels for CPython, but not for PyPy.
+This means that these dependencies will be built during installation.
+On macOS, you are likely to face an issue with building the Cryptography
+dependency. The solution to this problem is described
+`here <https://github.com/pyca/cryptography/issues/2692#issuecomment-272773481>`_,
+that is to ``brew install openssl`` and then export the flags that this command
+recommends (only needed when installing Scrapy). Installing on Linux has no special
+issues besides installing build dependencies.
+Installing Scrapy with PyPy on Windows is not tested.
+
+You can check that Scrapy is installed correctly by running ``scrapy bench``.
+If this command gives errors such as
+``TypeError: ... got 2 unexpected keyword arguments``, this means
+that setuptools was unable to pick up one PyPy-specific dependency.
+To fix this issue, run ``pip install 'PyPyDispatcher>=2.1.0'``.
+
+
+.. _intro-install-troubleshooting:
+
+Troubleshooting
+===============
+
+AttributeError: 'module' object has no attribute 'OP_NO_TLSv1_1'
+----------------------------------------------------------------
+
+After you install or upgrade Scrapy, Twisted or pyOpenSSL, you may get an
+exception with the following traceback::
+
+    […]
+      File "[…]/site-packages/twisted/protocols/tls.py", line 63, in <module>
+        from twisted.internet._sslverify import _setAcceptableProtocols
+      File "[…]/site-packages/twisted/internet/_sslverify.py", line 38, in <module>
+        TLSVersion.TLSv1_1: SSL.OP_NO_TLSv1_1,
+    AttributeError: 'module' object has no attribute 'OP_NO_TLSv1_1'
+
+The reason you get this exception is that your system or virtual environment
+has a version of pyOpenSSL that your version of Twisted does not support.
+
+To install a version of pyOpenSSL that your version of Twisted supports,
+reinstall Twisted with the :code:`tls` extra option::
+
+    pip install twisted[tls]
+
+For details, see `Issue #2473 <https://github.com/scrapy/scrapy/issues/2473>`_.
+
+.. _Python: https://www.python.org/
+.. _pip: https://pip.pypa.io/en/latest/installing/
+.. _lxml: https://lxml.de/index.html
+.. _parsel: https://pypi.org/project/parsel/
+.. _w3lib: https://pypi.org/project/w3lib/
+.. _twisted: https://twisted.org/
+.. _cryptography: https://cryptography.io/en/latest/
+.. _pyOpenSSL: https://pypi.org/project/pyOpenSSL/
+.. _setuptools: https://pypi.org/pypi/setuptools
+.. _homebrew: https://brew.sh/
+.. _zsh: https://www.zsh.org/
+.. _Anaconda: https://docs.anaconda.com/anaconda/
+.. _Miniconda: https://docs.conda.io/projects/conda/en/latest/user-guide/install/index.html
+.. _Visual Studio: https://docs.microsoft.com/en-us/visualstudio/install/install-visual-studio
+.. _Microsoft C++ Build Tools: https://visualstudio.microsoft.com/visual-cpp-build-tools/
+.. _conda-forge: https://conda-forge.org/
+
+
+--- END OF install安装指南.txt ---
+
+.. highlight:: none
+
+.. _topics-commands:
+
+=================
+Command line tool
+=================
+
+Scrapy is controlled through the ``scrapy`` command-line tool, to be referred to
+here as the "Scrapy tool" to differentiate it from the sub-commands, which we
+just call "commands" or "Scrapy commands".
+
+The Scrapy tool provides several commands, for multiple purposes, and each one
+accepts a different set of arguments and options.
+
+(The ``scrapy deploy`` command has been removed in 1.0 in favor of the
+standalone ``scrapyd-deploy``. See `Deploying your project`_.)
+
+.. _topics-config-settings:
+
+Configuration settings
+======================
+
+Scrapy will look for configuration parameters in ini-style ``scrapy.cfg`` files
+in standard locations:
+
+1. ``/etc/scrapy.cfg`` or ``c:\scrapy\scrapy.cfg`` (system-wide),
+2. ``~/.config/scrapy.cfg`` (``$XDG_CONFIG_HOME``) and ``~/.scrapy.cfg`` (``$HOME``)
+   for global (user-wide) settings, and
+3. ``scrapy.cfg`` inside a Scrapy project's root (see next section).
+
+Settings from these files are merged in the listed order of preference:
+user-defined values have higher priority than system-wide defaults
+and project-wide settings will override all others, when defined.
+
+Scrapy also understands, and can be configured through, a number of environment
+variables. Currently these are:
+
+* ``SCRAPY_SETTINGS_MODULE`` (see :ref:`topics-settings-module-envvar`)
+* ``SCRAPY_PROJECT`` (see :ref:`topics-project-envvar`)
+* ``SCRAPY_PYTHON_SHELL`` (see :ref:`topics-shell`)
+
+.. _topics-project-structure:
+
+Default structure of Scrapy projects
+====================================
+
+Before delving into the command-line tool and its sub-commands, let's first
+understand the directory structure of a Scrapy project.
+
+Though it can be modified, all Scrapy projects have the same file
+structure by default, similar to this::
+
+   scrapy.cfg
+   myproject/
+       __init__.py
+       items.py
+       middlewares.py
+       pipelines.py
+       settings.py
+       spiders/
+           __init__.py
+           spider1.py
+           spider2.py
+           ...
+
+The directory where the ``scrapy.cfg`` file resides is known as the *project
+root directory*. That file contains the name of the python module that defines
+the project settings. Here is an example:
+
+.. code-block:: ini
+
+    [settings]
+    default = myproject.settings
+
+.. _topics-project-envvar:
+
+Sharing the root directory between projects
+===========================================
+
+A project root directory, the one that contains the ``scrapy.cfg``, may be
+shared by multiple Scrapy projects, each with its own settings module.
+
+In that case, you must define one or more aliases for those settings modules
+under ``[settings]`` in your ``scrapy.cfg`` file:
+
+.. code-block:: ini
+
+    [settings]
+    default = myproject1.settings
+    project1 = myproject1.settings
+    project2 = myproject2.settings
+
+By default, the ``scrapy`` command-line tool will use the ``default`` settings.
+Use the ``SCRAPY_PROJECT`` environment variable to specify a different project
+for ``scrapy`` to use::
+
+    $ scrapy settings --get BOT_NAME
+    Project 1 Bot
+    $ export SCRAPY_PROJECT=project2
+    $ scrapy settings --get BOT_NAME
+    Project 2 Bot
+
+
+Using the ``scrapy`` tool
+=========================
+
+You can start by running the Scrapy tool with no arguments and it will print
+some usage help and the available commands::
+
+    Scrapy X.Y - no active project
+
+    Usage:
+      scrapy <command> [options] [args]
+
+    Available commands:
+      crawl         Run a spider
+      fetch         Fetch a URL using the Scrapy downloader
+    [...]
+
+The first line will print the currently active project if you're inside a
+Scrapy project. In this example it was run from outside a project. If run from inside
+a project it would have printed something like this::
+
+    Scrapy X.Y - project: myproject
+
+    Usage:
+      scrapy <command> [options] [args]
+
+    [...]
+
+Creating projects
+-----------------
+
+The first thing you typically do with the ``scrapy`` tool is create your Scrapy
+project::
+
+    scrapy startproject myproject [project_dir]
+
+That will create a Scrapy project under the ``project_dir`` directory.
+If ``project_dir`` wasn't specified, ``project_dir`` will be the same as ``myproject``.
+
+Next, you go inside the new project directory::
+
+    cd project_dir
+
+And you're ready to use the ``scrapy`` command to manage and control your
+project from there.
+
+Controlling projects
+--------------------
+
+You use the ``scrapy`` tool from inside your projects to control and manage
+them.
+
+For example, to create a new spider::
+
+    scrapy genspider mydomain mydomain.com
+
+Some Scrapy commands (like :command:`crawl`) must be run from inside a Scrapy
+project. See the :ref:`commands reference <topics-commands-ref>` below for more
+information on which commands must be run from inside projects, and which not.
+
+Also keep in mind that some commands may have slightly different behaviours
+when running them from inside projects. For example, the fetch command will use
+spider-overridden behaviours (such as the ``user_agent`` attribute to override
+the user-agent) if the url being fetched is associated with some specific
+spider. This is intentional, as the ``fetch`` command is meant to be used to
+check how spiders are downloading pages.
+
+.. _topics-commands-ref:
+
+Available tool commands
+=======================
+
+This section contains a list of the available built-in commands with a
+description and some usage examples. Remember, you can always get more info
+about each command by running::
+
+    scrapy <command> -h
+
+And you can see all available commands with::
+
+    scrapy -h
+
+There are two kinds of commands, those that only work from inside a Scrapy
+project (Project-specific commands) and those that also work without an active
+Scrapy project (Global commands), though they may behave slightly differently
+when run from inside a project (as they would use the project overridden
+settings).
+
+Global commands:
+
+* :command:`startproject`
+* :command:`genspider`
+* :command:`settings`
+* :command:`runspider`
+* :command:`shell`
+* :command:`fetch`
+* :command:`view`
+* :command:`version`
+
+Project-only commands:
+
+* :command:`crawl`
+* :command:`check`
+* :command:`list`
+* :command:`edit`
+* :command:`parse`
+* :command:`bench`
+
+.. command:: startproject
+
+startproject
+------------
+
+* Syntax: ``scrapy startproject <project_name> [project_dir]``
+* Requires project: *no*
+
+Creates a new Scrapy project named ``project_name``, under the ``project_dir``
+directory.
+If ``project_dir`` wasn't specified, ``project_dir`` will be the same as ``project_name``.
+
+Usage example::
+
+    $ scrapy startproject myproject
+
+.. command:: genspider
+
+genspider
+---------
+
+* Syntax: ``scrapy genspider [-t template] <name> <domain or URL>``
+* Requires project: *no*
+
+.. versionadded:: 2.6.0
+   The ability to pass a URL instead of a domain.
+
+Creates a new spider in the current folder or in the current project's ``spiders`` folder, if called from inside a project. The ``<name>`` parameter is set as the spider's ``name``, while ``<domain or URL>`` is used to generate the ``allowed_domains`` and ``start_urls`` spider's attributes.
+
+Usage example::
+
+    $ scrapy genspider -l
+    Available templates:
+      basic
+      crawl
+      csvfeed
+      xmlfeed
+
+    $ scrapy genspider example example.com
+    Created spider 'example' using template 'basic'
+
+    $ scrapy genspider -t crawl scrapyorg scrapy.org
+    Created spider 'scrapyorg' using template 'crawl'
+
+This is just a convenient shortcut command for creating spiders based on
+pre-defined templates, but certainly not the only way to create spiders. You
+can just create the spider source code files yourself, instead of using this
+command.
+
+.. command:: crawl
+
+crawl
+-----
+
+* Syntax: ``scrapy crawl <spider>``
+* Requires project: *yes*
+
+Start crawling using a spider.
+
+Supported options:
+
+* ``-h, --help``: show a help message and exit
+
+* ``-a NAME=VALUE``: set a spider argument (may be repeated)
+
+* ``--output FILE`` or ``-o FILE``: append scraped items to the end of FILE (use - for stdout). To define the output format, set a colon at the end of the output URI (i.e. ``-o FILE:FORMAT``)
+
+* ``--overwrite-output FILE`` or ``-O FILE``: dump scraped items into FILE, overwriting any existing file. To define the output format, set a colon at the end of the output URI (i.e. ``-O FILE:FORMAT``)
+
+Usage examples::
+
+    $ scrapy crawl myspider
+    [ ... myspider starts crawling ... ]
+
+    $ scrapy crawl -o myfile:csv myspider
+    [ ... myspider starts crawling and appends the result to the file myfile in csv format ... ]
+
+    $ scrapy crawl -O myfile:json myspider
+    [ ... myspider starts crawling and saves the result in myfile in json format overwriting the original content... ]
+
+.. command:: check
+
+check
+-----
+
+* Syntax: ``scrapy check [-l] <spider>``
+* Requires project: *yes*
+
+Run contract checks.
+
+.. skip: start
+
+Usage examples::
+
+    $ scrapy check -l
+    first_spider
+      * parse
+      * parse_item
+    second_spider
+      * parse
+      * parse_item
+
+    $ scrapy check
+    [FAILED] first_spider:parse_item
+    >>> 'RetailPricex' field is missing
+
+    [FAILED] first_spider:parse
+    >>> Returned 92 requests, expected 0..4
+
+.. skip: end
+
+.. command:: list
+
+list
+----
+
+* Syntax: ``scrapy list``
+* Requires project: *yes*
+
+List all available spiders in the current project. The output is one spider per
+line.
+
+Usage example::
+
+    $ scrapy list
+    spider1
+    spider2
+
+.. command:: edit
+
+edit
+----
+
+* Syntax: ``scrapy edit <spider>``
+* Requires project: *yes*
+
+Edit the given spider using the editor defined in the ``EDITOR`` environment
+variable or (if unset) the :setting:`EDITOR` setting.
+
+This command is provided only as a convenient shortcut for the most common
+case, the developer is of course free to choose any tool or IDE to write and
+debug spiders.
+
+Usage example::
+
+    $ scrapy edit spider1
+
+.. command:: fetch
+
+fetch
+-----
+
+* Syntax: ``scrapy fetch <url>``
+* Requires project: *no*
+
+Downloads the given URL using the Scrapy downloader and writes the contents to
+standard output.
+
+The interesting thing about this command is that it fetches the page the way the
+spider would download it. For example, if the spider has a ``USER_AGENT``
+attribute which overrides the User Agent, it will use that one.
+
+So this command can be used to "see" how your spider would fetch a certain page.
+
+If used outside a project, no particular per-spider behaviour would be applied
+and it will just use the default Scrapy downloader settings.
+
+Supported options:
+
+* ``--spider=SPIDER``: bypass spider autodetection and force use of specific spider
+
+* ``--headers``: print the response's HTTP headers instead of the response's body
+
+* ``--no-redirect``: do not follow HTTP 3xx redirects (default is to follow them)
+
+Usage examples::
+
+    $ scrapy fetch --nolog http://www.example.com/some/page.html
+    [ ... html content here ... ]
+
+    $ scrapy fetch --nolog --headers http://www.example.com/
+    {'Accept-Ranges': ['bytes'],
+     'Age': ['1263   '],
+     'Connection': ['close     '],
+     'Content-Length': ['596'],
+     'Content-Type': ['text/html; charset=UTF-8'],
+     'Date': ['Wed, 18 Aug 2010 23:59:46 GMT'],
+     'Etag': ['"573c1-254-48c9c87349680"'],
+     'Last-Modified': ['Fri, 30 Jul 2010 15:30:18 GMT'],
+     'Server': ['Apache/2.2.3 (CentOS)']}
+
+.. command:: view
+
+view
+----
+
+* Syntax: ``scrapy view <url>``
+* Requires project: *no*
+
+Opens the given URL in a browser, as your Scrapy spider would "see" it.
+Sometimes spiders see pages differently from regular users, so this can be used
+to check what the spider "sees" and confirm it's what you expect.
+
+Supported options:
+
+* ``--spider=SPIDER``: bypass spider autodetection and force use of specific spider
+
+* ``--no-redirect``: do not follow HTTP 3xx redirects (default is to follow them)
+
+Usage example::
+
+    $ scrapy view http://www.example.com/some/page.html
+    [ ... browser starts ... ]
+
+.. command:: shell
+
+shell
+-----
+
+* Syntax: ``scrapy shell [url]``
+* Requires project: *no*
+
+Starts the Scrapy shell for the given URL (if given) or empty if no URL is
+given. Also supports UNIX-style local file paths, either relative with
+``./`` or ``../`` prefixes or absolute file paths.
+See :ref:`topics-shell` for more info.
+
+Supported options:
+
+* ``--spider=SPIDER``: bypass spider autodetection and force use of specific spider
+
+* ``-c code``: evaluate the code in the shell, print the result and exit
+
+* ``--no-redirect``: do not follow HTTP 3xx redirects (default is to follow them);
+  this only affects the URL you may pass as argument on the command line;
+  once you are inside the shell, ``fetch(url)`` will still follow HTTP redirects by default.
+
+Usage example::
+
+    $ scrapy shell http://www.example.com/some/page.html
+    [ ... scrapy shell starts ... ]
+
+    $ scrapy shell --nolog http://www.example.com/ -c '(response.status, response.url)'
+    (200, 'http://www.example.com/')
+
+    # shell follows HTTP redirects by default
+    $ scrapy shell --nolog http://httpbin.org/redirect-to?url=http%3A%2F%2Fexample.com%2F -c '(response.status, response.url)'
+    (200, 'http://example.com/')
+
+    # you can disable this with --no-redirect
+    # (only for the URL passed as command line argument)
+    $ scrapy shell --no-redirect --nolog http://httpbin.org/redirect-to?url=http%3A%2F%2Fexample.com%2F -c '(response.status, response.url)'
+    (302, 'http://httpbin.org/redirect-to?url=http%3A%2F%2Fexample.com%2F')
+
+
+.. command:: parse
+
+parse
+-----
+
+* Syntax: ``scrapy parse <url> [options]``
+* Requires project: *yes*
+
+Fetches the given URL and parses it with the spider that handles it, using the
+method passed with the ``--callback`` option, or ``parse`` if not given.
+
+Supported options:
+
+* ``--spider=SPIDER``: bypass spider autodetection and force use of specific spider
+
+* ``--a NAME=VALUE``: set spider argument (may be repeated)
+
+* ``--callback`` or ``-c``: spider method to use as callback for parsing the
+  response
+
+* ``--meta`` or ``-m``: additional request meta that will be passed to the callback
+  request. This must be a valid json string. Example: --meta='{"foo" : "bar"}'
+
+* ``--cbkwargs``: additional keyword arguments that will be passed to the callback.
+  This must be a valid json string. Example: --cbkwargs='{"foo" : "bar"}'
+
+* ``--pipelines``: process items through pipelines
+
+* ``--rules`` or ``-r``: use :class:`~scrapy.spiders.CrawlSpider`
+  rules to discover the callback (i.e. spider method) to use for parsing the
+  response
+
+* ``--noitems``: don't show scraped items
+
+* ``--nolinks``: don't show extracted links
+
+* ``--nocolour``: avoid using pygments to colorize the output
+
+* ``--depth`` or ``-d``: depth level for which the requests should be followed
+  recursively (default: 1)
+
+* ``--verbose`` or ``-v``: display information for each depth level
+
+* ``--output`` or ``-o``: dump scraped items to a file
+
+  .. versionadded:: 2.3
+
+.. skip: start
+
+Usage example::
+
+    $ scrapy parse http://www.example.com/ -c parse_item
+    [ ... scrapy log lines crawling example.com spider ... ]
+
+    >>> STATUS DEPTH LEVEL 1 <<<
+    # Scraped Items  ------------------------------------------------------------
+    [{'name': 'Example item',
+     'category': 'Furniture',
+     'length': '12 cm'}]
+
+    # Requests  -----------------------------------------------------------------
+    []
+
+.. skip: end
+
+
+.. command:: settings
+
+settings
+--------
+
+* Syntax: ``scrapy settings [options]``
+* Requires project: *no*
+
+Get the value of a Scrapy setting.
+
+If used inside a project it'll show the project setting value, otherwise it'll
+show the default Scrapy value for that setting.
+
+Example usage::
+
+    $ scrapy settings --get BOT_NAME
+    scrapybot
+    $ scrapy settings --get DOWNLOAD_DELAY
+    0
+
+.. command:: runspider
+
+runspider
+---------
+
+* Syntax: ``scrapy runspider <spider_file.py>``
+* Requires project: *no*
+
+Run a spider self-contained in a Python file, without having to create a
+project.
+
+Example usage::
+
+    $ scrapy runspider myspider.py
+    [ ... spider starts crawling ... ]
+
+.. command:: version
+
+version
+-------
+
+* Syntax: ``scrapy version [-v]``
+* Requires project: *no*
+
+Prints the Scrapy version. If used with ``-v`` it also prints Python, Twisted
+and Platform info, which is useful for bug reports.
+
+.. command:: bench
+
+bench
+-----
+
+* Syntax: ``scrapy bench``
+* Requires project: *no*
+
+Run a quick benchmark test. :ref:`benchmarking`.
+
+Custom project commands
+=======================
+
+You can also add your custom project commands by using the
+:setting:`COMMANDS_MODULE` setting. See the Scrapy commands in
+`scrapy/commands`_ for examples on how to implement your commands.
+
+.. _scrapy/commands: https://github.com/scrapy/scrapy/tree/master/scrapy/commands
+.. setting:: COMMANDS_MODULE
+
+COMMANDS_MODULE
+---------------
+
+Default: ``''`` (empty string)
+
+A module to use for looking up custom Scrapy commands. This is used to add custom
+commands for your Scrapy project.
+
+Example:
+
+.. code-block:: python
+
+    COMMANDS_MODULE = "mybot.commands"
+
+.. _Deploying your project: https://scrapyd.readthedocs.io/en/latest/deploy.html
+
+Register commands via setup.py entry points
+-------------------------------------------
+
+You can also add Scrapy commands from an external library by adding a
+``scrapy.commands`` section in the entry points of the library ``setup.py``
+file.
+
+The following example adds ``my_command`` command:
+
+.. skip: next
+
+.. code-block:: python
+
+  from setuptools import setup, find_packages
+
+  setup(
+      name="scrapy-mymodule",
+      entry_points={
+          "scrapy.commands": [
+              "my_command=my_scrapy_module.commands:MyCommand",
+          ],
+      },
+  )
+
+
+--- END OF commands_命令行工具.txt ---
+
+.. _topics-spiders:
+
+=======
+Spiders
+=======
+
+Spiders are classes which define how a certain site (or a group of sites) will be
+scraped, including how to perform the crawl (i.e. follow links) and how to
+extract structured data from their pages (i.e. scraping items). In other words,
+Spiders are the place where you define the custom behaviour for crawling and
+parsing pages for a particular site (or, in some cases, a group of sites).
+
+For spiders, the scraping cycle goes through something like this:
+
+1. You start by generating the initial requests to crawl the first URLs, and
+   specify a callback function to be called with the response downloaded from
+   those requests.
+
+   The first requests to perform are obtained by iterating the
+   :meth:`~scrapy.Spider.start` method, which by default yields a
+   :class:`~scrapy.Request` object for each URL in the
+   :attr:`~scrapy.Spider.start_urls` spider attribute, with the
+   :attr:`~scrapy.Spider.parse` method set as :attr:`~scrapy.Request.callback`
+   function to handle each :class:`~scrapy.http.Response`.
+
+2. In the callback function, you parse the response (web page) and return
+   :ref:`item objects <topics-items>`,
+   :class:`~scrapy.Request` objects, or an iterable of these objects.
+   Those Requests will also contain a callback (maybe
+   the same) and will then be downloaded by Scrapy and then their
+   response handled by the specified callback.
+
+3. In callback functions, you parse the page contents, typically using
+   :ref:`topics-selectors` (but you can also use BeautifulSoup, lxml or whatever
+   mechanism you prefer) and generate items with the parsed data.
+
+4. Finally, the items returned from the spider will be typically persisted to a
+   database (in some :ref:`Item Pipeline <topics-item-pipeline>`) or written to
+   a file using :ref:`topics-feed-exports`.
+
+Even though this cycle applies (more or less) to any kind of spider, there are
+different kinds of default spiders bundled into Scrapy for different purposes.
+We will talk about those types here.
+
+.. _topics-spiders-ref:
+
+scrapy.Spider
+=============
+
+.. class:: scrapy.spiders.Spider
+.. autoclass:: scrapy.Spider
+
+   .. attribute:: name
+
+       A string which defines the name for this spider. The spider name is how
+       the spider is located (and instantiated) by Scrapy, so it must be
+       unique. However, nothing prevents you from instantiating more than one
+       instance of the same spider. This is the most important spider attribute
+       and it's required.
+
+       If the spider scrapes a single domain, a common practice is to name the
+       spider after the domain, with or without the `TLD`_. So, for example, a
+       spider that crawls ``mywebsite.com`` would often be called
+       ``mywebsite``.
+
+   .. attribute:: allowed_domains
+
+       An optional list of strings containing domains that this spider is
+       allowed to crawl. Requests for URLs not belonging to the domain names
+       specified in this list (or their subdomains) won't be followed if
+       :class:`~scrapy.downloadermiddlewares.offsite.OffsiteMiddleware` is
+       enabled.
+
+       Let's say your target url is ``https://www.example.com/1.html``,
+       then add ``'example.com'`` to the list.
+
+   .. autoattribute:: start_urls
+
+   .. attribute:: custom_settings
+
+      A dictionary of settings that will be overridden from the project wide
+      configuration when running this spider. It must be defined as a class
+      attribute since the settings are updated before instantiation.
+
+      For a list of available built-in settings see:
+      :ref:`topics-settings-ref`.
+
+   .. attribute:: crawler
+
+      This attribute is set by the :meth:`from_crawler` class method after
+      initializing the class, and links to the
+      :class:`~scrapy.crawler.Crawler` object to which this spider instance is
+      bound.
+
+      Crawlers encapsulate a lot of components in the project for their single
+      entry access (such as extensions, middlewares, signals managers, etc).
+      See :ref:`topics-api-crawler` to know more about them.
+
+   .. attribute:: settings
+
+      Configuration for running this spider. This is a
+      :class:`~scrapy.settings.Settings` instance, see the
+      :ref:`topics-settings` topic for a detailed introduction on this subject.
+
+   .. attribute:: logger
+
+      Python logger created with the Spider's :attr:`name`. You can use it to
+      send log messages through it as described on
+      :ref:`topics-logging-from-spiders`.
+
+   .. attribute:: state
+
+      A dict you can use to persist some spider state between batches.
+      See :ref:`topics-keeping-persistent-state-between-batches` to know more about it.
+
+   .. method:: from_crawler(crawler, *args, **kwargs)
+
+       This is the class method used by Scrapy to create your spiders.
+
+       You probably won't need to override this directly because the default
+       implementation acts as a proxy to the :meth:`__init__` method, calling
+       it with the given arguments ``args`` and named arguments ``kwargs``.
+
+       Nonetheless, this method sets the :attr:`crawler` and :attr:`settings`
+       attributes in the new instance so they can be accessed later inside the
+       spider's code.
+
+       .. versionchanged:: 2.11
+
+           The settings in ``crawler.settings`` can now be modified in this
+           method, which is handy if you want to modify them based on
+           arguments. As a consequence, these settings aren't the final values
+           as they can be modified later by e.g. :ref:`add-ons
+           <topics-addons>`. For the same reason, most of the
+           :class:`~scrapy.crawler.Crawler` attributes aren't initialized at
+           this point.
+
+           The final settings and the initialized
+           :class:`~scrapy.crawler.Crawler` attributes are available in the
+           :meth:`start` method, handlers of the
+           :signal:`engine_started` signal and later.
+
+       :param crawler: crawler to which the spider will be bound
+       :type crawler: :class:`~scrapy.crawler.Crawler` instance
+
+       :param args: arguments passed to the :meth:`__init__` method
+       :type args: list
+
+       :param kwargs: keyword arguments passed to the :meth:`__init__` method
+       :type kwargs: dict
+
+   .. classmethod:: update_settings(settings)
+
+       The ``update_settings()`` method is used to modify the spider's settings
+       and is called during initialization of a spider instance.
+
+       It takes a :class:`~scrapy.settings.Settings` object as a parameter and
+       can add or update the spider's configuration values. This method is a
+       class method, meaning that it is called on the :class:`~scrapy.Spider`
+       class and allows all instances of the spider to share the same
+       configuration.
+
+       While per-spider settings can be set in
+       :attr:`~scrapy.Spider.custom_settings`, using ``update_settings()``
+       allows you to dynamically add, remove or change settings based on other
+       settings, spider attributes or other factors and use setting priorities
+       other than ``'spider'``. Also, it's easy to extend ``update_settings()``
+       in a subclass by overriding it, while doing the same with
+       :attr:`~scrapy.Spider.custom_settings` can be hard.
+
+       For example, suppose a spider needs to modify :setting:`FEEDS`:
+
+       .. code-block:: python
+
+           import scrapy
+
+
+           class MySpider(scrapy.Spider):
+               name = "myspider"
+               custom_feed = {
+                   "/home/user/documents/items.json": {
+                       "format": "json",
+                       "indent": 4,
+                   }
+               }
+
+               @classmethod
+               def update_settings(cls, settings):
+                   super().update_settings(settings)
+                   settings.setdefault("FEEDS", {}).update(cls.custom_feed)
+
+   .. automethod:: start
+
+   .. method:: parse(response)
+
+       This is the default callback used by Scrapy to process downloaded
+       responses, when their requests don't specify a callback.
+
+       The ``parse`` method is in charge of processing the response and returning
+       scraped data and/or more URLs to follow. Other Requests callbacks have
+       the same requirements as the :class:`Spider` class.
+
+       This method, as well as any other Request callback, must return a
+       :class:`~scrapy.Request` object, an :ref:`item object <topics-items>`, an
+       iterable of :class:`~scrapy.Request` objects and/or :ref:`item objects
+       <topics-items>`, or ``None``.
+
+       :param response: the response to parse
+       :type response: :class:`~scrapy.http.Response`
+
+   .. method:: log(message, [level, component])
+
+       Wrapper that sends a log message through the Spider's :attr:`logger`,
+       kept for backward compatibility. For more information see
+       :ref:`topics-logging-from-spiders`.
+
+   .. method:: closed(reason)
+
+       Called when the spider closes. This method provides a shortcut to
+       signals.connect() for the :signal:`spider_closed` signal.
+
+Let's see an example:
+
+.. code-block:: python
+
+    import scrapy
+
+
+    class MySpider(scrapy.Spider):
+        name = "example.com"
+        allowed_domains = ["example.com"]
+        start_urls = [
+            "http://www.example.com/1.html",
+            "http://www.example.com/2.html",
+            "http://www.example.com/3.html",
+        ]
+
+        def parse(self, response):
+            self.logger.info("A response from %s just arrived!", response.url)
+
+Return multiple Requests and items from a single callback:
+
+.. code-block:: python
+
+    import scrapy
+
+
+    class MySpider(scrapy.Spider):
+        name = "example.com"
+        allowed_domains = ["example.com"]
+        start_urls = [
+            "http://www.example.com/1.html",
+            "http://www.example.com/2.html",
+            "http://www.example.com/3.html",
+        ]
+
+        def parse(self, response):
+            for h3 in response.xpath("//h3").getall():
+                yield {"title": h3}
+
+            for href in response.xpath("//a/@href").getall():
+                yield scrapy.Request(response.urljoin(href), self.parse)
+
+Instead of :attr:`~.start_urls` you can use :meth:`~scrapy.Spider.start`
+directly; to give data more structure you can use :class:`~scrapy.Item`
+objects:
+
+.. skip: next
+.. code-block:: python
+
+    import scrapy
+    from myproject.items import MyItem
+
+
+    class MySpider(scrapy.Spider):
+        name = "example.com"
+        allowed_domains = ["example.com"]
+
+        async def start(self):
+            yield scrapy.Request("http://www.example.com/1.html", self.parse)
+            yield scrapy.Request("http://www.example.com/2.html", self.parse)
+            yield scrapy.Request("http://www.example.com/3.html", self.parse)
+
+        def parse(self, response):
+            for h3 in response.xpath("//h3").getall():
+                yield MyItem(title=h3)
+
+            for href in response.xpath("//a/@href").getall():
+                yield scrapy.Request(response.urljoin(href), self.parse)
+
+.. _spiderargs:
+
+Spider arguments
+================
+
+Spiders can receive arguments that modify their behaviour. Some common uses for
+spider arguments are to define the start URLs or to restrict the crawl to
+certain sections of the site, but they can be used to configure any
+functionality of the spider.
+
+Spider arguments are passed through the :command:`crawl` command using the
+``-a`` option. For example::
+
+    scrapy crawl myspider -a category=electronics
+
+Spiders can access arguments in their `__init__` methods:
+
+.. code-block:: python
+
+    import scrapy
+
+
+    class MySpider(scrapy.Spider):
+        name = "myspider"
+
+        def __init__(self, category=None, *args, **kwargs):
+            super(MySpider, self).__init__(*args, **kwargs)
+            self.start_urls = [f"http://www.example.com/categories/{category}"]
+            # ...
+
+The default `__init__` method will take any spider arguments
+and copy them to the spider as attributes.
+The above example can also be written as follows:
+
+.. code-block:: python
+
+    import scrapy
+
+
+    class MySpider(scrapy.Spider):
+        name = "myspider"
+
+        async def start(self):
+            yield scrapy.Request(f"http://www.example.com/categories/{self.category}")
+
+If you are :ref:`running Scrapy from a script <run-from-script>`, you can
+specify spider arguments when calling
+:class:`CrawlerProcess.crawl <scrapy.crawler.CrawlerProcess.crawl>` or
+:class:`CrawlerRunner.crawl <scrapy.crawler.CrawlerRunner.crawl>`:
+
+.. skip: next
+.. code-block:: python
+
+    process = CrawlerProcess()
+    process.crawl(MySpider, category="electronics")
+
+Keep in mind that spider arguments are only strings.
+The spider will not do any parsing on its own.
+If you were to set the ``start_urls`` attribute from the command line,
+you would have to parse it on your own into a list
+using something like :func:`ast.literal_eval` or :func:`json.loads`
+and then set it as an attribute.
+Otherwise, you would cause iteration over a ``start_urls`` string
+(a very common python pitfall)
+resulting in each character being seen as a separate url.
+
+A valid use case is to set the http auth credentials
+used by :class:`~scrapy.downloadermiddlewares.httpauth.HttpAuthMiddleware`
+or the user agent
+used by :class:`~scrapy.downloadermiddlewares.useragent.UserAgentMiddleware`::
+
+    scrapy crawl myspider -a http_user=myuser -a http_pass=mypassword -a user_agent=mybot
+
+Spider arguments can also be passed through the Scrapyd ``schedule.json`` API.
+See `Scrapyd documentation`_.
+
+.. _start-requests:
+
+Start requests
+==============
+
+**Start requests** are :class:`~scrapy.Request` objects yielded from the
+:meth:`~scrapy.Spider.start` method of a spider or from the
+:meth:`~scrapy.spidermiddlewares.SpiderMiddleware.process_start` method of a
+:ref:`spider middleware <topics-spider-middleware>`.
+
+.. seealso:: :ref:`start-request-order`
+
+.. _start-requests-lazy:
+
+Delaying start request iteration
+--------------------------------
+
+You can override the :meth:`~scrapy.Spider.start` method as follows to pause
+its iteration whenever there are scheduled requests:
+
+.. code-block:: python
+
+    async def start(self):
+        async for item_or_request in super().start():
+            if self.crawler.engine.needs_backout():
+                await self.crawler.signals.wait_for(signals.scheduler_empty)
+            yield item_or_request
+
+This can help minimize the number of requests in the scheduler at any given
+time, to minimize resource usage (memory or disk, depending on
+:setting:`JOBDIR`).
+
+.. _builtin-spiders:
+
+Generic Spiders
+===============
+
+Scrapy comes with some useful generic spiders that you can use to subclass
+your spiders from. Their aim is to provide convenient functionality for a few
+common scraping cases, like following all links on a site based on certain
+rules, crawling from `Sitemaps`_, or parsing an XML/CSV feed.
+
+For the examples used in the following spiders, we'll assume you have a project
+with a ``TestItem`` declared in a ``myproject.items`` module:
+
+.. code-block:: python
+
+    import scrapy
+
+
+    class TestItem(scrapy.Item):
+        id = scrapy.Field()
+        name = scrapy.Field()
+        description = scrapy.Field()
+
+
+.. currentmodule:: scrapy.spiders
+
+CrawlSpider
+-----------
+
+.. class:: CrawlSpider
+
+   This is the most commonly used spider for crawling regular websites, as it
+   provides a convenient mechanism for following links by defining a set of rules.
+   It may not be the best suited for your particular web sites or project, but
+   it's generic enough for several cases, so you can start from it and override it
+   as needed for more custom functionality, or just implement your own spider.
+
+   Apart from the attributes inherited from Spider (that you must
+   specify), this class supports a new attribute:
+
+   .. attribute:: rules
+
+       Which is a list of one (or more) :class:`Rule` objects.  Each :class:`Rule`
+       defines a certain behaviour for crawling the site. Rules objects are
+       described below. If multiple rules match the same link, the first one
+       will be used, according to the order they're defined in this attribute.
+
+   This spider also exposes an overridable method:
+
+   .. method:: parse_start_url(response, **kwargs)
+
+      This method is called for each response produced for the URLs in
+      the spider's ``start_urls`` attribute. It allows to parse
+      the initial responses and must return either an
+      :ref:`item object <topics-items>`, a :class:`~scrapy.Request`
+      object, or an iterable containing any of them.
+
+Crawling rules
+~~~~~~~~~~~~~~
+
+.. autoclass:: Rule
+
+   ``link_extractor`` is a :ref:`Link Extractor <topics-link-extractors>` object which
+   defines how links will be extracted from each crawled page. Each produced link will
+   be used to generate a :class:`~scrapy.Request` object, which will contain the
+   link's text in its ``meta`` dictionary (under the ``link_text`` key).
+   If omitted, a default link extractor created with no arguments will be used,
+   resulting in all links being extracted.
+
+   ``callback`` is a callable or a string (in which case a method from the spider
+   object with that name will be used) to be called for each link extracted with
+   the specified link extractor. This callback receives a :class:`~scrapy.http.Response`
+   as its first argument and must return either a single instance or an iterable of
+   :ref:`item objects <topics-items>` and/or :class:`~scrapy.Request` objects
+   (or any subclass of them). As mentioned above, the received :class:`~scrapy.http.Response`
+   object will contain the text of the link that produced the :class:`~scrapy.Request`
+   in its ``meta`` dictionary (under the ``link_text`` key)
+
+   ``cb_kwargs`` is a dict containing the keyword arguments to be passed to the
+   callback function.
+
+   ``follow`` is a boolean which specifies if links should be followed from each
+   response extracted with this rule. If ``callback`` is None ``follow`` defaults
+   to ``True``, otherwise it defaults to ``False``.
+
+   ``process_links`` is a callable, or a string (in which case a method from the
+   spider object with that name will be used) which will be called for each list
+   of links extracted from each response using the specified ``link_extractor``.
+   This is mainly used for filtering purposes.
+
+   ``process_request`` is a callable (or a string, in which case a method from
+   the spider object with that name will be used) which will be called for every
+   :class:`~scrapy.Request` extracted by this rule. This callable should
+   take said request as first argument and the :class:`~scrapy.http.Response`
+   from which the request originated as second argument. It must return a
+   ``Request`` object or ``None`` (to filter out the request).
+
+   ``errback`` is a callable or a string (in which case a method from the spider
+   object with that name will be used) to be called if any exception is
+   raised while processing a request generated by the rule.
+   It receives a :class:`Twisted Failure <twisted.python.failure.Failure>`
+   instance as first parameter.
+
+   .. warning:: Because of its internal implementation, you must explicitly set
+      callbacks for new requests when writing :class:`CrawlSpider`-based spiders;
+      unexpected behaviour can occur otherwise.
+
+   .. versionadded:: 2.0
+      The *errback* parameter.
+
+CrawlSpider example
+~~~~~~~~~~~~~~~~~~~
+
+Let's now take a look at an example CrawlSpider with rules:
+
+.. code-block:: python
+
+    import scrapy
+    from scrapy.spiders import CrawlSpider, Rule
+    from scrapy.linkextractors import LinkExtractor
+
+
+    class MySpider(CrawlSpider):
+        name = "example.com"
+        allowed_domains = ["example.com"]
+        start_urls = ["http://www.example.com"]
+
+        rules = (
+            # Extract links matching 'category.php' (but not matching 'subsection.php')
+            # and follow links from them (since no callback means follow=True by default).
+            Rule(LinkExtractor(allow=(r"category\.php",), deny=(r"subsection\.php",))),
+            # Extract links matching 'item.php' and parse them with the spider's method parse_item
+            Rule(LinkExtractor(allow=(r"item\.php",)), callback="parse_item"),
+        )
+
+        def parse_item(self, response):
+            self.logger.info("Hi, this is an item page! %s", response.url)
+            item = scrapy.Item()
+            item["id"] = response.xpath('//td[@id="item_id"]/text()').re(r"ID: (\d+)")
+            item["name"] = response.xpath('//td[@id="item_name"]/text()').get()
+            item["description"] = response.xpath(
+                '//td[@id="item_description"]/text()'
+            ).get()
+            item["link_text"] = response.meta["link_text"]
+            url = response.xpath('//td[@id="additional_data"]/@href').get()
+            return response.follow(
+                url, self.parse_additional_page, cb_kwargs=dict(item=item)
+            )
+
+        def parse_additional_page(self, response, item):
+            item["additional_data"] = response.xpath(
+                '//p[@id="additional_data"]/text()'
+            ).get()
+            return item
+
+
+This spider would start crawling example.com's home page, collecting category
+links, and item links, parsing the latter with the ``parse_item`` method. For
+each item response, some data will be extracted from the HTML using XPath, and
+an :class:`~scrapy.Item` will be filled with it.
+
+XMLFeedSpider
+-------------
+
+.. class:: XMLFeedSpider
+
+    XMLFeedSpider is designed for parsing XML feeds by iterating through them by a
+    certain node name.  The iterator can be chosen from: ``iternodes``, ``xml``,
+    and ``html``.  It's recommended to use the ``iternodes`` iterator for
+    performance reasons, since the ``xml`` and ``html`` iterators generate the
+    whole DOM at once in order to parse it.  However, using ``html`` as the
+    iterator may be useful when parsing XML with bad markup.
+
+    To set the iterator and the tag name, you must define the following class
+    attributes:
+
+    .. attribute:: iterator
+
+        A string which defines the iterator to use. It can be either:
+
+           - ``'iternodes'`` - a fast iterator based on regular expressions
+
+           - ``'html'`` - an iterator which uses :class:`~scrapy.Selector`.
+             Keep in mind this uses DOM parsing and must load all DOM in memory
+             which could be a problem for big feeds
+
+           - ``'xml'`` - an iterator which uses :class:`~scrapy.Selector`.
+             Keep in mind this uses DOM parsing and must load all DOM in memory
+             which could be a problem for big feeds
+
+        It defaults to: ``'iternodes'``.
+
+    .. attribute:: itertag
+
+        A string with the name of the node (or element) to iterate in. Example::
+
+            itertag = 'product'
+
+    .. attribute:: namespaces
+
+        A list of ``(prefix, uri)`` tuples which define the namespaces
+        available in that document that will be processed with this spider. The
+        ``prefix`` and ``uri`` will be used to automatically register
+        namespaces using the
+        :meth:`~scrapy.Selector.register_namespace` method.
+
+        You can then specify nodes with namespaces in the :attr:`itertag`
+        attribute.
+
+        Example::
+
+            class YourSpider(XMLFeedSpider):
+
+                namespaces = [('n', 'http://www.sitemaps.org/schemas/sitemap/0.9')]
+                itertag = 'n:url'
+                # ...
+
+    Apart from these new attributes, this spider has the following overridable
+    methods too:
+
+    .. method:: adapt_response(response)
+
+        A method that receives the response as soon as it arrives from the spider
+        middleware, before the spider starts parsing it. It can be used to modify
+        the response body before parsing it. This method receives a response and
+        also returns a response (it could be the same or another one).
+
+    .. method:: parse_node(response, selector)
+
+        This method is called for the nodes matching the provided tag name
+        (``itertag``).  Receives the response and an
+        :class:`~scrapy.Selector` for each node.  Overriding this
+        method is mandatory. Otherwise, you spider won't work.  This method
+        must return an :ref:`item object <topics-items>`, a
+        :class:`~scrapy.Request` object, or an iterable containing any of
+        them.
+
+    .. method:: process_results(response, results)
+
+        This method is called for each result (item or request) returned by the
+        spider, and it's intended to perform any last time processing required
+        before returning the results to the framework core, for example setting the
+        item IDs. It receives a list of results and the response which originated
+        those results. It must return a list of results (items or requests).
+
+    .. warning:: Because of its internal implementation, you must explicitly set
+       callbacks for new requests when writing :class:`XMLFeedSpider`-based spiders;
+       unexpected behaviour can occur otherwise.
+
+
+XMLFeedSpider example
+~~~~~~~~~~~~~~~~~~~~~
+
+These spiders are pretty easy to use, let's have a look at one example:
+
+.. skip: next
+.. code-block:: python
+
+    from scrapy.spiders import XMLFeedSpider
+    from myproject.items import TestItem
+
+
+    class MySpider(XMLFeedSpider):
+        name = "example.com"
+        allowed_domains = ["example.com"]
+        start_urls = ["http://www.example.com/feed.xml"]
+        iterator = "iternodes"  # This is actually unnecessary, since it's the default value
+        itertag = "item"
+
+        def parse_node(self, response, node):
+            self.logger.info(
+                "Hi, this is a <%s> node!: %s", self.itertag, "".join(node.getall())
+            )
+
+            item = TestItem()
+            item["id"] = node.xpath("@id").get()
+            item["name"] = node.xpath("name").get()
+            item["description"] = node.xpath("description").get()
+            return item
+
+Basically what we did up there was to create a spider that downloads a feed from
+the given ``start_urls``, and then iterates through each of its ``item`` tags,
+prints them out, and stores some random data in an :class:`~scrapy.Item`.
+
+CSVFeedSpider
+-------------
+
+.. class:: CSVFeedSpider
+
+   This spider is very similar to the XMLFeedSpider, except that it iterates
+   over rows, instead of nodes. The method that gets called in each iteration
+   is :meth:`parse_row`.
+
+   .. attribute:: delimiter
+
+       A string with the separator character for each field in the CSV file
+       Defaults to ``','`` (comma).
+
+   .. attribute:: quotechar
+
+       A string with the enclosure character for each field in the CSV file
+       Defaults to ``'"'`` (quotation mark).
+
+   .. attribute:: headers
+
+       A list of the column names in the CSV file.
+
+   .. method:: parse_row(response, row)
+
+       Receives a response and a dict (representing each row) with a key for each
+       provided (or detected) header of the CSV file.  This spider also gives the
+       opportunity to override ``adapt_response`` and ``process_results`` methods
+       for pre- and post-processing purposes.
+
+CSVFeedSpider example
+~~~~~~~~~~~~~~~~~~~~~
+
+Let's see an example similar to the previous one, but using a
+:class:`CSVFeedSpider`:
+
+.. skip: next
+.. code-block:: python
+
+    from scrapy.spiders import CSVFeedSpider
+    from myproject.items import TestItem
+
+
+    class MySpider(CSVFeedSpider):
+        name = "example.com"
+        allowed_domains = ["example.com"]
+        start_urls = ["http://www.example.com/feed.csv"]
+        delimiter = ";"
+        quotechar = "'"
+        headers = ["id", "name", "description"]
+
+        def parse_row(self, response, row):
+            self.logger.info("Hi, this is a row!: %r", row)
+
+            item = TestItem()
+            item["id"] = row["id"]
+            item["name"] = row["name"]
+            item["description"] = row["description"]
+            return item
+
+
+SitemapSpider
+-------------
+
+.. class:: SitemapSpider
+
+    SitemapSpider allows you to crawl a site by discovering the URLs using
+    `Sitemaps`_.
+
+    It supports nested sitemaps and discovering sitemap urls from
+    `robots.txt`_.
+
+    .. attribute:: sitemap_urls
+
+        A list of urls pointing to the sitemaps whose urls you want to crawl.
+
+        You can also point to a `robots.txt`_ and it will be parsed to extract
+        sitemap urls from it.
+
+    .. attribute:: sitemap_rules
+
+        A list of tuples ``(regex, callback)`` where:
+
+        * ``regex`` is a regular expression to match urls extracted from sitemaps.
+          ``regex`` can be either a str or a compiled regex object.
+
+        * callback is the callback to use for processing the urls that match
+          the regular expression. ``callback`` can be a string (indicating the
+          name of a spider method) or a callable.
+
+        For example::
+
+            sitemap_rules = [('/product/', 'parse_product')]
+
+        Rules are applied in order, and only the first one that matches will be
+        used.
+
+        If you omit this attribute, all urls found in sitemaps will be
+        processed with the ``parse`` callback.
+
+    .. attribute:: sitemap_follow
+
+        A list of regexes of sitemap that should be followed. This is only
+        for sites that use `Sitemap index files`_ that point to other sitemap
+        files.
+
+        By default, all sitemaps are followed.
+
+    .. attribute:: sitemap_alternate_links
+
+        Specifies if alternate links for one ``url`` should be followed. These
+        are links for the same website in another language passed within
+        the same ``url`` block.
+
+        For example::
+
+            <url>
+                <loc>http://example.com/</loc>
+                <xhtml:link rel="alternate" hreflang="de" href="http://example.com/de"/>
+            </url>
+
+        With ``sitemap_alternate_links`` set, this would retrieve both URLs. With
+        ``sitemap_alternate_links`` disabled, only ``http://example.com/`` would be
+        retrieved.
+
+        Default is ``sitemap_alternate_links`` disabled.
+
+    .. method:: sitemap_filter(entries)
+
+        This is a filter function that could be overridden to select sitemap entries
+        based on their attributes.
+
+        For example::
+
+            <url>
+                <loc>http://example.com/</loc>
+                <lastmod>2005-01-01</lastmod>
+            </url>
+
+        We can define a ``sitemap_filter`` function to filter ``entries`` by date:
+
+        .. code-block:: python
+
+            from datetime import datetime
+            from scrapy.spiders import SitemapSpider
+
+
+            class FilteredSitemapSpider(SitemapSpider):
+                name = "filtered_sitemap_spider"
+                allowed_domains = ["example.com"]
+                sitemap_urls = ["http://example.com/sitemap.xml"]
+
+                def sitemap_filter(self, entries):
+                    for entry in entries:
+                        date_time = datetime.strptime(entry["lastmod"], "%Y-%m-%d")
+                        if date_time.year >= 2005:
+                            yield entry
+
+        This would retrieve only ``entries`` modified on 2005 and the following
+        years.
+
+        Entries are dict objects extracted from the sitemap document.
+        Usually, the key is the tag name and the value is the text inside it.
+
+        It's important to notice that:
+
+        - as the loc attribute is required, entries without this tag are discarded
+        - alternate links are stored in a list with the key ``alternate``
+          (see ``sitemap_alternate_links``)
+        - namespaces are removed, so lxml tags named as ``{namespace}tagname`` become only ``tagname``
+
+        If you omit this method, all entries found in sitemaps will be
+        processed, observing other attributes and their settings.
+
+
+SitemapSpider examples
+~~~~~~~~~~~~~~~~~~~~~~
+
+Simplest example: process all urls discovered through sitemaps using the
+``parse`` callback:
+
+.. code-block:: python
+
+    from scrapy.spiders import SitemapSpider
+
+
+    class MySpider(SitemapSpider):
+        sitemap_urls = ["http://www.example.com/sitemap.xml"]
+
+        def parse(self, response):
+            pass  # ... scrape item here ...
+
+Process some urls with certain callback and other urls with a different
+callback:
+
+.. code-block:: python
+
+    from scrapy.spiders import SitemapSpider
+
+
+    class MySpider(SitemapSpider):
+        sitemap_urls = ["http://www.example.com/sitemap.xml"]
+        sitemap_rules = [
+            ("/product/", "parse_product"),
+            ("/category/", "parse_category"),
+        ]
+
+        def parse_product(self, response):
+            pass  # ... scrape product ...
+
+        def parse_category(self, response):
+            pass  # ... scrape category ...
+
+Follow sitemaps defined in the `robots.txt`_ file and only follow sitemaps
+whose url contains ``/sitemap_shop``:
+
+.. code-block:: python
+
+    from scrapy.spiders import SitemapSpider
+
+
+    class MySpider(SitemapSpider):
+        sitemap_urls = ["http://www.example.com/robots.txt"]
+        sitemap_rules = [
+            ("/shop/", "parse_shop"),
+        ]
+        sitemap_follow = ["/sitemap_shops"]
+
+        def parse_shop(self, response):
+            pass  # ... scrape shop here ...
+
+Combine SitemapSpider with other sources of urls:
+
+.. code-block:: python
+
+    from scrapy.spiders import SitemapSpider
+
+
+    class MySpider(SitemapSpider):
+        sitemap_urls = ["http://www.example.com/robots.txt"]
+        sitemap_rules = [
+            ("/shop/", "parse_shop"),
+        ]
+
+        other_urls = ["http://www.example.com/about"]
+
+        async def start(self):
+            async for item_or_request in super().start():
+                yield item_or_request
+            for url in self.other_urls:
+                yield Request(url, self.parse_other)
+
+        def parse_shop(self, response):
+            pass  # ... scrape shop here ...
+
+        def parse_other(self, response):
+            pass  # ... scrape other here ...
+
+.. _Sitemaps: https://www.sitemaps.org/index.html
+.. _Sitemap index files: https://www.sitemaps.org/protocol.html#index
+.. _robots.txt: https://www.robotstxt.org/
+.. _TLD: https://en.wikipedia.org/wiki/Top-level_domain
+.. _Scrapyd documentation: https://scrapyd.readthedocs.io/en/latest/
+
+
+--- END OF spiders_蜘蛛爬虫.txt ---
+

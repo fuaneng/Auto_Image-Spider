@@ -1,0 +1,1333 @@
+.. _topics-contracts:
+
+=================
+Spiders Contracts
+=================
+
+Testing spiders can get particularly annoying and while nothing prevents you
+from writing unit tests the task gets cumbersome quickly. Scrapy offers an
+integrated way of testing your spiders by the means of contracts.
+
+This allows you to test each callback of your spider by hardcoding a sample url
+and check various constraints for how the callback processes the response. Each
+contract is prefixed with an ``@`` and included in the docstring. See the
+following example:
+
+.. code-block:: python
+
+    def parse(self, response):
+        """
+        This function parses a sample response. Some contracts are mingled
+        with this docstring.
+
+        @url http://www.example.com/s?field-keywords=selfish+gene
+        @returns items 1 16
+        @returns requests 0 0
+        @scrapes Title Author Year Price
+        """
+
+You can use the following contracts:
+
+.. module:: scrapy.contracts.default
+
+.. class:: UrlContract
+
+    This contract (``@url``) sets the sample URL used when checking other
+    contract conditions for this spider. This contract is mandatory. All
+    callbacks lacking this contract are ignored when running the checks::
+
+    @url url
+
+.. class:: CallbackKeywordArgumentsContract
+
+    This contract (``@cb_kwargs``) sets the :attr:`cb_kwargs <scrapy.Request.cb_kwargs>`
+    attribute for the sample request. It must be a valid JSON dictionary.
+    ::
+
+    @cb_kwargs {"arg1": "value1", "arg2": "value2", ...}
+
+.. class:: MetadataContract
+
+    This contract (``@meta``) sets the :attr:`meta <scrapy.Request.meta>`
+    attribute for the sample request. It must be a valid JSON dictionary.
+    ::
+
+    @meta {"arg1": "value1", "arg2": "value2", ...}
+
+.. class:: ReturnsContract
+
+    This contract (``@returns``) sets lower and upper bounds for the items and
+    requests returned by the spider. The upper bound is optional::
+
+    @returns item(s)|request(s) [min [max]]
+
+.. class:: ScrapesContract
+
+    This contract (``@scrapes``) checks that all the items returned by the
+    callback have the specified fields::
+
+    @scrapes field_1 field_2 ...
+
+Use the :command:`check` command to run the contract checks.
+
+Custom Contracts
+================
+
+If you find you need more power than the built-in Scrapy contracts you can
+create and load your own contracts in the project by using the
+:setting:`SPIDER_CONTRACTS` setting:
+
+.. code-block:: python
+
+    SPIDER_CONTRACTS = {
+        "myproject.contracts.ResponseCheck": 10,
+        "myproject.contracts.ItemValidate": 10,
+    }
+
+Each contract must inherit from :class:`~scrapy.contracts.Contract` and can
+override three methods:
+
+.. module:: scrapy.contracts
+
+.. class:: Contract(method, *args)
+
+    :param method: callback function to which the contract is associated
+    :type method: collections.abc.Callable
+
+    :param args: list of arguments passed into the docstring (whitespace
+        separated)
+    :type args: list
+
+    .. method:: Contract.adjust_request_args(args)
+
+        This receives a ``dict`` as an argument containing default arguments
+        for request object. :class:`~scrapy.Request` is used by default,
+        but this can be changed with the ``request_cls`` attribute.
+        If multiple contracts in chain have this attribute defined, the last one is used.
+
+        Must return the same or a modified version of it.
+
+    .. method:: Contract.pre_process(response)
+
+        This allows hooking in various checks on the response received from the
+        sample request, before it's being passed to the callback.
+
+    .. method:: Contract.post_process(output)
+
+        This allows processing the output of the callback. Iterators are
+        converted to lists before being passed to this hook.
+
+Raise :class:`~scrapy.exceptions.ContractFail` from
+:class:`~scrapy.contracts.Contract.pre_process` or
+:class:`~scrapy.contracts.Contract.post_process` if expectations are not met:
+
+.. autoclass:: scrapy.exceptions.ContractFail
+
+Here is a demo contract which checks the presence of a custom header in the
+response received:
+
+.. skip: next
+.. code-block:: python
+
+    from scrapy.contracts import Contract
+    from scrapy.exceptions import ContractFail
+
+
+    class HasHeaderContract(Contract):
+        """
+        Demo contract which checks the presence of a custom header
+        @has_header X-CustomHeader
+        """
+
+        name = "has_header"
+
+        def pre_process(self, response):
+            for header in self.args:
+                if header not in response.headers:
+                    raise ContractFail("X-CustomHeader not present")
+
+.. _detecting-contract-check-runs:
+
+Detecting check runs
+====================
+
+When ``scrapy check`` is running, the ``SCRAPY_CHECK`` environment variable is
+set to the ``true`` string. You can use :data:`os.environ` to perform any change to
+your spiders or your settings when ``scrapy check`` is used:
+
+.. code-block:: python
+
+    import os
+    import scrapy
+
+
+    class ExampleSpider(scrapy.Spider):
+        name = "example"
+
+        def __init__(self):
+            if os.environ.get("SCRAPY_CHECK"):
+                pass  # Do some scraper adjustments when a check is running
+
+
+--- END OF contracts_爬虫契约.txt ---
+
+.. _topics-practices:
+
+================
+Common Practices
+================
+
+This section documents common practices when using Scrapy. These are things
+that cover many topics and don't often fall into any other specific section.
+
+.. skip: start
+
+.. _run-from-script:
+
+Run Scrapy from a script
+========================
+
+You can use the :ref:`API <topics-api>` to run Scrapy from a script, instead of
+the typical way of running Scrapy via ``scrapy crawl``.
+
+Remember that Scrapy is built on top of the Twisted
+asynchronous networking library, so you need to run it inside the Twisted reactor.
+
+The first utility you can use to run your spiders is
+:class:`scrapy.crawler.CrawlerProcess`. This class will start a Twisted reactor
+for you, configuring the logging and setting shutdown handlers. This class is
+the one used by all Scrapy commands.
+
+Here's an example showing how to run a single spider with it.
+
+.. code-block:: python
+
+    import scrapy
+    from scrapy.crawler import CrawlerProcess
+
+
+    class MySpider(scrapy.Spider):
+        # Your spider definition
+        ...
+
+
+    process = CrawlerProcess(
+        settings={
+            "FEEDS": {
+                "items.json": {"format": "json"},
+            },
+        }
+    )
+
+    process.crawl(MySpider)
+    process.start()  # the script will block here until the crawling is finished
+
+Define settings within dictionary in CrawlerProcess. Make sure to check :class:`~scrapy.crawler.CrawlerProcess`
+documentation to get acquainted with its usage details.
+
+If you are inside a Scrapy project there are some additional helpers you can
+use to import those components within the project. You can automatically import
+your spiders passing their name to :class:`~scrapy.crawler.CrawlerProcess`, and
+use ``get_project_settings`` to get a :class:`~scrapy.settings.Settings`
+instance with your project settings.
+
+What follows is a working example of how to do that, using the `testspiders`_
+project as example.
+
+.. code-block:: python
+
+    from scrapy.crawler import CrawlerProcess
+    from scrapy.utils.project import get_project_settings
+
+    process = CrawlerProcess(get_project_settings())
+
+    # 'followall' is the name of one of the spiders of the project.
+    process.crawl("followall", domain="scrapy.org")
+    process.start()  # the script will block here until the crawling is finished
+
+There's another Scrapy utility that provides more control over the crawling
+process: :class:`scrapy.crawler.CrawlerRunner`. This class is a thin wrapper
+that encapsulates some simple helpers to run multiple crawlers, but it won't
+start or interfere with existing reactors in any way.
+
+Using this class the reactor should be explicitly run after scheduling your
+spiders. It's recommended you use :class:`~scrapy.crawler.CrawlerRunner`
+instead of :class:`~scrapy.crawler.CrawlerProcess` if your application is
+already using Twisted and you want to run Scrapy in the same reactor.
+
+Note that you will also have to shutdown the Twisted reactor yourself after the
+spider is finished. This can be achieved by adding callbacks to the deferred
+returned by the :meth:`CrawlerRunner.crawl
+<scrapy.crawler.CrawlerRunner.crawl>` method.
+
+Here's an example of its usage, along with a callback to manually stop the
+reactor after ``MySpider`` has finished running.
+
+.. code-block:: python
+
+    import scrapy
+    from scrapy.crawler import CrawlerRunner
+    from scrapy.utils.log import configure_logging
+    from scrapy.utils.reactor import install_reactor
+
+
+    class MySpider(scrapy.Spider):
+        # Your spider definition
+        ...
+
+
+    install_reactor("twisted.internet.asyncioreactor.AsyncioSelectorReactor")
+    configure_logging({"LOG_FORMAT": "%(levelname)s: %(message)s"})
+    runner = CrawlerRunner()
+
+    d = runner.crawl(MySpider)
+
+    from twisted.internet import reactor
+
+    d.addBoth(lambda _: reactor.stop())
+    reactor.run()  # the script will block here until the crawling is finished
+
+Same example but using a different reactor.
+
+.. code-block:: python
+
+    import scrapy
+    from scrapy.crawler import CrawlerRunner
+    from scrapy.utils.log import configure_logging
+    from scrapy.utils.reactor import install_reactor
+
+
+    class MySpider(scrapy.Spider):
+        custom_settings = {
+            "TWISTED_REACTOR": "twisted.internet.epollreactor.EPollReactor",
+        }
+        # Your spider definition
+        ...
+
+
+    install_reactor("twisted.internet.epollreactor.EPollReactor")
+    configure_logging({"LOG_FORMAT": "%(levelname)s: %(message)s"})
+    runner = CrawlerRunner()
+    d = runner.crawl(MySpider)
+
+    from twisted.internet import reactor
+
+    d.addBoth(lambda _: reactor.stop())
+    reactor.run()  # the script will block here until the crawling is finished
+
+.. seealso:: :doc:`twisted:core/howto/reactor-basics`
+
+.. _run-multiple-spiders:
+
+Running multiple spiders in the same process
+============================================
+
+By default, Scrapy runs a single spider per process when you run ``scrapy
+crawl``. However, Scrapy supports running multiple spiders per process using
+the :ref:`internal API <topics-api>`.
+
+Here is an example that runs multiple spiders simultaneously:
+
+.. code-block:: python
+
+    import scrapy
+    from scrapy.crawler import CrawlerProcess
+    from scrapy.utils.project import get_project_settings
+
+
+    class MySpider1(scrapy.Spider):
+        # Your first spider definition
+        ...
+
+
+    class MySpider2(scrapy.Spider):
+        # Your second spider definition
+        ...
+
+
+    settings = get_project_settings()
+    process = CrawlerProcess(settings)
+    process.crawl(MySpider1)
+    process.crawl(MySpider2)
+    process.start()  # the script will block here until all crawling jobs are finished
+
+Same example using :class:`~scrapy.crawler.CrawlerRunner`:
+
+.. code-block:: python
+
+    import scrapy
+    from scrapy.crawler import CrawlerRunner
+    from scrapy.utils.log import configure_logging
+    from scrapy.utils.project import get_project_settings
+    from scrapy.utils.reactor import install_reactor
+
+
+    class MySpider1(scrapy.Spider):
+        # Your first spider definition
+        ...
+
+
+    class MySpider2(scrapy.Spider):
+        # Your second spider definition
+        ...
+
+
+    install_reactor("twisted.internet.asyncioreactor.AsyncioSelectorReactor")
+    configure_logging()
+    settings = get_project_settings()
+    runner = CrawlerRunner(settings)
+    runner.crawl(MySpider1)
+    runner.crawl(MySpider2)
+    d = runner.join()
+
+    from twisted.internet import reactor
+
+    d.addBoth(lambda _: reactor.stop())
+
+    reactor.run()  # the script will block here until all crawling jobs are finished
+
+Same example but running the spiders sequentially by chaining the deferreds:
+
+.. code-block:: python
+
+    from twisted.internet import defer
+    from scrapy.crawler import CrawlerRunner
+    from scrapy.utils.log import configure_logging
+    from scrapy.utils.project import get_project_settings
+    from scrapy.utils.reactor import install_reactor
+
+
+    class MySpider1(scrapy.Spider):
+        # Your first spider definition
+        ...
+
+
+    class MySpider2(scrapy.Spider):
+        # Your second spider definition
+        ...
+
+
+    install_reactor("twisted.internet.asyncioreactor.AsyncioSelectorReactor")
+    settings = get_project_settings()
+    configure_logging(settings)
+    runner = CrawlerRunner(settings)
+
+
+    @defer.inlineCallbacks
+    def crawl():
+        yield runner.crawl(MySpider1)
+        yield runner.crawl(MySpider2)
+        reactor.stop()
+
+
+    from twisted.internet import reactor
+
+    crawl()
+    reactor.run()  # the script will block here until the last crawl call is finished
+
+.. note:: When running multiple spiders in the same process, :ref:`reactor
+    settings <reactor-settings>` should not have a different value per spider.
+    Also, :ref:`pre-crawler settings <pre-crawler-settings>` cannot be defined
+    per spider.
+
+.. seealso:: :ref:`run-from-script`.
+
+.. skip: end
+
+.. _distributed-crawls:
+
+Distributed crawls
+==================
+
+Scrapy doesn't provide any built-in facility for running crawls in a distribute
+(multi-server) manner. However, there are some ways to distribute crawls, which
+vary depending on how you plan to distribute them.
+
+If you have many spiders, the obvious way to distribute the load is to setup
+many Scrapyd instances and distribute spider runs among those.
+
+If you instead want to run a single (big) spider through many machines, what
+you usually do is partition the urls to crawl and send them to each separate
+spider. Here is a concrete example:
+
+First, you prepare the list of urls to crawl and put them into separate
+files/urls::
+
+    http://somedomain.com/urls-to-crawl/spider1/part1.list
+    http://somedomain.com/urls-to-crawl/spider1/part2.list
+    http://somedomain.com/urls-to-crawl/spider1/part3.list
+
+Then you fire a spider run on 3 different Scrapyd servers. The spider would
+receive a (spider) argument ``part`` with the number of the partition to
+crawl::
+
+    curl http://scrapy1.mycompany.com:6800/schedule.json -d project=myproject -d spider=spider1 -d part=1
+    curl http://scrapy2.mycompany.com:6800/schedule.json -d project=myproject -d spider=spider1 -d part=2
+    curl http://scrapy3.mycompany.com:6800/schedule.json -d project=myproject -d spider=spider1 -d part=3
+
+.. _bans:
+
+Avoiding getting banned
+=======================
+
+Some websites implement certain measures to prevent bots from crawling them,
+with varying degrees of sophistication. Getting around those measures can be
+difficult and tricky, and may sometimes require special infrastructure. Please
+consider contacting `commercial support`_ if in doubt.
+
+Here are some tips to keep in mind when dealing with these kinds of sites:
+
+* rotate your user agent from a pool of well-known ones from browsers (google
+  around to get a list of them)
+* disable cookies (see :setting:`COOKIES_ENABLED`) as some sites may use
+  cookies to spot bot behaviour
+* use download delays (2 or higher). See :setting:`DOWNLOAD_DELAY` setting.
+* if possible, use `Common Crawl`_ to fetch pages, instead of hitting the sites
+  directly
+* use a pool of rotating IPs. For example, the free `Tor project`_ or paid
+  services like `ProxyMesh`_. An open source alternative is `scrapoxy`_, a
+  super proxy that you can attach your own proxies to.
+* use a ban avoidance service, such as `Zyte API`_, which provides a `Scrapy
+  plugin <https://github.com/scrapy-plugins/scrapy-zyte-api>`__ and additional
+  features, like `AI web scraping <https://www.zyte.com/ai-web-scraping/>`__
+
+If you are still unable to prevent your bot getting banned, consider contacting
+`commercial support`_.
+
+.. _Tor project: https://www.torproject.org/
+.. _commercial support: https://scrapy.org/support/
+.. _ProxyMesh: https://proxymesh.com/
+.. _Common Crawl: https://commoncrawl.org/
+.. _testspiders: https://github.com/scrapinghub/testspiders
+.. _scrapoxy: https://scrapoxy.io/
+.. _Zyte API: https://docs.zyte.com/zyte-api/get-started.html
+
+
+--- END OF practices_常见做法.txt ---
+
+.. _topics-broad-crawls:
+
+============
+Broad Crawls
+============
+
+Scrapy defaults are optimized for crawling specific sites. These sites are
+often handled by a single Scrapy spider, although this is not necessary or
+required (for example, there are generic spiders that handle any given site
+thrown at them).
+
+In addition to this "focused crawl", there is another common type of crawling
+which covers a large (potentially unlimited) number of domains, and is only
+limited by time or other arbitrary constraint, rather than stopping when the
+domain was crawled to completion or when there are no more requests to perform.
+These are called "broad crawls" and is the typical crawlers employed by search
+engines.
+
+These are some common properties often found in broad crawls:
+
+* they crawl many domains (often, unbounded) instead of a specific set of sites
+
+* they don't necessarily crawl domains to completion, because it would be
+  impractical (or impossible) to do so, and instead limit the crawl by time or
+  number of pages crawled
+
+* they are simpler in logic (as opposed to very complex spiders with many
+  extraction rules) because data is often post-processed in a separate stage
+
+* they crawl many domains concurrently, which allows them to achieve faster
+  crawl speeds by not being limited by any particular site constraint (each site
+  is crawled slowly to respect politeness, but many sites are crawled in
+  parallel)
+
+As said above, Scrapy default settings are optimized for focused crawls, not
+broad crawls. However, due to its asynchronous architecture, Scrapy is very
+well suited for performing fast broad crawls. This page summarizes some things
+you need to keep in mind when using Scrapy for doing broad crawls, along with
+concrete suggestions of Scrapy settings to tune in order to achieve an
+efficient broad crawl.
+
+.. _broad-crawls-scheduler-priority-queue:
+
+Use the right :setting:`SCHEDULER_PRIORITY_QUEUE`
+=================================================
+
+Scrapy’s default scheduler priority queue is ``'scrapy.pqueues.ScrapyPriorityQueue'``.
+It works best during single-domain crawl. It does not work well with crawling
+many different domains in parallel
+
+To apply the recommended priority queue use:
+
+.. code-block:: python
+
+    SCHEDULER_PRIORITY_QUEUE = "scrapy.pqueues.DownloaderAwarePriorityQueue"
+
+.. _broad-crawls-concurrency:
+
+Increase concurrency
+====================
+
+Concurrency is the number of requests that are processed in parallel. There is
+a global limit (:setting:`CONCURRENT_REQUESTS`) and an additional limit that
+can be set either per domain (:setting:`CONCURRENT_REQUESTS_PER_DOMAIN`) or per
+IP (:setting:`CONCURRENT_REQUESTS_PER_IP`).
+
+.. note:: The scheduler priority queue :ref:`recommended for broad crawls
+          <broad-crawls-scheduler-priority-queue>` does not support
+          :setting:`CONCURRENT_REQUESTS_PER_IP`.
+
+The default global concurrency limit in Scrapy is not suitable for crawling
+many different domains in parallel, so you will want to increase it. How much
+to increase it will depend on how much CPU and memory your crawler will have
+available.
+
+A good starting point is ``100``:
+
+.. code-block:: python
+
+    CONCURRENT_REQUESTS = 100
+
+But the best way to find out is by doing some trials and identifying at what
+concurrency your Scrapy process gets CPU bounded. For optimum performance, you
+should pick a concurrency where CPU usage is at 80-90%.
+
+Increasing concurrency also increases memory usage. If memory usage is a
+concern, you might need to lower your global concurrency limit accordingly.
+
+
+Increase Twisted IO thread pool maximum size
+============================================
+
+Currently Scrapy does DNS resolution in a blocking way with usage of thread
+pool. With higher concurrency levels the crawling could be slow or even fail
+hitting DNS resolver timeouts. Possible solution to increase the number of
+threads handling DNS queries. The DNS queue will be processed faster speeding
+up establishing of connection and crawling overall.
+
+To increase maximum thread pool size use:
+
+.. code-block:: python
+
+    REACTOR_THREADPOOL_MAXSIZE = 20
+
+Setup your own DNS
+==================
+
+If you have multiple crawling processes and single central DNS, it can act
+like DoS attack on the DNS server resulting to slow down of entire network or
+even blocking your machines. To avoid this setup your own DNS server with
+local cache and upstream to some large DNS like OpenDNS or Verizon.
+
+Reduce log level
+================
+
+When doing broad crawls you are often only interested in the crawl rates you
+get and any errors found. These stats are reported by Scrapy when using the
+``INFO`` log level. In order to save CPU (and log storage requirements) you
+should not use ``DEBUG`` log level when performing large broad crawls in
+production. Using ``DEBUG`` level when developing your (broad) crawler may be
+fine though.
+
+To set the log level use:
+
+.. code-block:: python
+
+    LOG_LEVEL = "INFO"
+
+Disable cookies
+===============
+
+Disable cookies unless you *really* need. Cookies are often not needed when
+doing broad crawls (search engine crawlers ignore them), and they improve
+performance by saving some CPU cycles and reducing the memory footprint of your
+Scrapy crawler.
+
+To disable cookies use:
+
+.. code-block:: python
+
+    COOKIES_ENABLED = False
+
+Disable retries
+===============
+
+Retrying failed HTTP requests can slow down the crawls substantially, specially
+when sites causes are very slow (or fail) to respond, thus causing a timeout
+error which gets retried many times, unnecessarily, preventing crawler capacity
+to be reused for other domains.
+
+To disable retries use:
+
+.. code-block:: python
+
+    RETRY_ENABLED = False
+
+Reduce download timeout
+=======================
+
+Unless you are crawling from a very slow connection (which shouldn't be the
+case for broad crawls) reduce the download timeout so that stuck requests are
+discarded quickly and free up capacity to process the next ones.
+
+To reduce the download timeout use:
+
+.. code-block:: python
+
+    DOWNLOAD_TIMEOUT = 15
+
+Disable redirects
+=================
+
+Consider disabling redirects, unless you are interested in following them. When
+doing broad crawls it's common to save redirects and resolve them when
+revisiting the site at a later crawl. This also help to keep the number of
+request constant per crawl batch, otherwise redirect loops may cause the
+crawler to dedicate too many resources on any specific domain.
+
+To disable redirects use:
+
+.. code-block:: python
+
+    REDIRECT_ENABLED = False
+
+.. _broad-crawls-bfo:
+
+Crawl in BFO order
+==================
+
+:ref:`Scrapy crawls in DFO order by default <faq-bfo-dfo>`.
+
+In broad crawls, however, page crawling tends to be faster than page
+processing. As a result, unprocessed early requests stay in memory until the
+final depth is reached, which can significantly increase memory usage.
+
+:ref:`Crawl in BFO order <faq-bfo-dfo>` instead to save memory.
+
+
+Be mindful of memory leaks
+==========================
+
+If your broad crawl shows a high memory usage, in addition to :ref:`crawling in
+BFO order <broad-crawls-bfo>` and :ref:`lowering concurrency
+<broad-crawls-concurrency>` you should :ref:`debug your memory leaks
+<topics-leaks>`.
+
+
+Install a specific Twisted reactor
+==================================
+
+If the crawl is exceeding the system's capabilities, you might want to try
+installing a specific Twisted reactor, via the :setting:`TWISTED_REACTOR` setting.
+
+
+--- END OF broad-crawls_广域爬取.txt ---
+
+.. _topics-developer-tools:
+
+=================================================
+Using your browser's Developer Tools for scraping
+=================================================
+
+Here is a general guide on how to use your browser's Developer Tools
+to ease the scraping process. Today almost all browsers come with
+built in `Developer Tools`_ and although we will use Firefox in this
+guide, the concepts are applicable to any other browser.
+
+In this guide we'll introduce the basic tools to use from a browser's
+Developer Tools by scraping `quotes.toscrape.com`_.
+
+.. _topics-livedom:
+
+Caveats with inspecting the live browser DOM
+============================================
+
+Since Developer Tools operate on a live browser DOM, what you'll actually see
+when inspecting the page source is not the original HTML, but a modified one
+after applying some browser clean up and executing JavaScript code.  Firefox,
+in particular, is known for adding ``<tbody>`` elements to tables.  Scrapy, on
+the other hand, does not modify the original page HTML, so you won't be able to
+extract any data if you use ``<tbody>`` in your XPath expressions.
+
+Therefore, you should keep in mind the following things:
+
+* Disable JavaScript while inspecting the DOM looking for XPaths to be
+  used in Scrapy (in the Developer Tools settings click `Disable JavaScript`)
+
+* Never use full XPath paths, use relative and clever ones based on attributes
+  (such as ``id``, ``class``, ``width``, etc) or any identifying features like
+  ``contains(@href, 'image')``.
+
+* Never include ``<tbody>`` elements in your XPath expressions unless you
+  really know what you're doing
+
+.. _topics-inspector:
+
+Inspecting a website
+====================
+
+By far the most handy feature of the Developer Tools is the `Inspector`
+feature, which allows you to inspect the underlying HTML code of
+any webpage. To demonstrate the Inspector, let's look at the
+`quotes.toscrape.com`_-site.
+
+On the site we have a total of ten quotes from various authors with specific
+tags, as well as the Top Ten Tags. Let's say we want to extract all the quotes
+on this page, without any meta-information about authors, tags, etc.
+
+Instead of viewing the whole source code for the page, we can simply right click
+on a quote and select ``Inspect Element (Q)``, which opens up the `Inspector`.
+In it you should see something like this:
+
+.. image:: _images/inspector_01.png
+   :width: 777
+   :height: 469
+   :alt: Firefox's Inspector-tool
+
+The interesting part for us is this:
+
+.. code-block:: html
+
+    <div class="quote" itemscope="" itemtype="http://schema.org/CreativeWork">
+      <span class="text" itemprop="text">(...)</span>
+      <span>(...)</span>
+      <div class="tags">(...)</div>
+    </div>
+
+If you hover over the first ``div`` directly above the ``span`` tag highlighted
+in the screenshot, you'll see that the corresponding section of the webpage gets
+highlighted as well. So now we have a section, but we can't find our quote text
+anywhere.
+
+The advantage of the `Inspector` is that it automatically expands and collapses
+sections and tags of a webpage, which greatly improves readability. You can
+expand and collapse a tag by clicking on the arrow in front of it or by double
+clicking directly on the tag. If we expand the ``span`` tag with the ``class=
+"text"`` we will see the quote-text we clicked on. The `Inspector` lets you
+copy XPaths to selected elements. Let's try it out.
+
+First open the Scrapy shell at https://quotes.toscrape.com/ in a terminal:
+
+.. code-block:: none
+
+    $ scrapy shell "https://quotes.toscrape.com/"
+
+Then, back to your web browser, right-click on the ``span`` tag, select
+``Copy > XPath`` and paste it in the Scrapy shell like so:
+
+.. invisible-code-block: python
+
+    response = load_response('https://quotes.toscrape.com/', 'quotes.html')
+
+.. code-block:: pycon
+
+  >>> response.xpath("/html/body/div/div[2]/div[1]/div[1]/span[1]/text()").getall()
+  ['“The world as we have created it is a process of our thinking. It cannot be changed without changing our thinking.”']
+
+Adding ``text()`` at the end we are able to extract the first quote with this
+basic selector. But this XPath is not really that clever. All it does is
+go down a desired path in the source code starting from ``html``. So let's
+see if we can refine our XPath a bit:
+
+If we check the `Inspector` again we'll see that directly beneath our
+expanded ``div`` tag we have nine identical ``div`` tags, each with the
+same attributes as our first. If we expand any of them, we'll see the same
+structure as with our first quote: Two ``span`` tags and one ``div`` tag. We can
+expand each ``span`` tag with the ``class="text"`` inside our ``div`` tags and
+see each quote:
+
+.. code-block:: html
+
+    <div class="quote" itemscope="" itemtype="http://schema.org/CreativeWork">
+      <span class="text" itemprop="text">
+        “The world as we have created it is a process of our thinking. It cannot be changed without changing our thinking.”
+      </span>
+      <span>(...)</span>
+      <div class="tags">(...)</div>
+    </div>
+
+
+With this knowledge we can refine our XPath: Instead of a path to follow,
+we'll simply select all ``span`` tags with the ``class="text"`` by using
+the `has-class-extension`_:
+
+.. code-block:: pycon
+
+    >>> response.xpath('//span[has-class("text")]/text()').getall()
+    ['“The world as we have created it is a process of our thinking. It cannot be changed without changing our thinking.”',
+    '“It is our choices, Harry, that show what we truly are, far more than our abilities.”',
+    '“There are only two ways to live your life. One is as though nothing is a miracle. The other is as though everything is a miracle.”',
+    ...]
+
+And with one simple, cleverer XPath we are able to extract all quotes from
+the page. We could have constructed a loop over our first XPath to increase
+the number of the last ``div``, but this would have been unnecessarily
+complex and by simply constructing an XPath with ``has-class("text")``
+we were able to extract all quotes in one line.
+
+The `Inspector` has a lot of other helpful features, such as searching in the
+source code or directly scrolling to an element you selected. Let's demonstrate
+a use case:
+
+Say you want to find the ``Next`` button on the page. Type ``Next`` into the
+search bar on the top right of the `Inspector`. You should get two results.
+The first is a ``li`` tag with the ``class="next"``, the second the text
+of an ``a`` tag. Right click on the ``a`` tag and select ``Scroll into View``.
+If you hover over the tag, you'll see the button highlighted. From here
+we could easily create a :ref:`Link Extractor <topics-link-extractors>` to
+follow the pagination. On a simple site such as this, there may not be
+the need to find an element visually but the ``Scroll into View`` function
+can be quite useful on complex sites.
+
+Note that the search bar can also be used to search for and test CSS
+selectors. For example, you could search for ``span.text`` to find
+all quote texts. Instead of a full text search, this searches for
+exactly the ``span`` tag with the ``class="text"`` in the page.
+
+.. _topics-network-tool:
+
+The Network-tool
+================
+While scraping you may come across dynamic webpages where some parts
+of the page are loaded dynamically through multiple requests. While
+this can be quite tricky, the `Network`-tool in the Developer Tools
+greatly facilitates this task. To demonstrate the Network-tool, let's
+take a look at the page `quotes.toscrape.com/scroll`_.
+
+The page is quite similar to the basic `quotes.toscrape.com`_-page,
+but instead of the above-mentioned ``Next`` button, the page
+automatically loads new quotes when you scroll to the bottom. We
+could go ahead and try out different XPaths directly, but instead
+we'll check another quite useful command from the Scrapy shell:
+
+.. skip: next
+
+.. code-block:: none
+
+  $ scrapy shell "quotes.toscrape.com/scroll"
+  (...)
+  >>> view(response)
+
+A browser window should open with the webpage but with one
+crucial difference: Instead of the quotes we just see a greenish
+bar with the word ``Loading...``.
+
+.. image:: _images/network_01.png
+   :width: 777
+   :height: 296
+   :alt: Response from quotes.toscrape.com/scroll
+
+The ``view(response)`` command let's us view the response our
+shell or later our spider receives from the server. Here we see
+that some basic template is loaded which includes the title,
+the login-button and the footer, but the quotes are missing. This
+tells us that the quotes are being loaded from a different request
+than ``quotes.toscrape/scroll``.
+
+If you click on the ``Network`` tab, you will probably only see
+two entries. The first thing we do is enable persistent logs by
+clicking on ``Persist Logs``. If this option is disabled, the
+log is automatically cleared each time you navigate to a different
+page. Enabling this option is a good default, since it gives us
+control on when to clear the logs.
+
+If we reload the page now, you'll see the log get populated with six
+new requests.
+
+.. image:: _images/network_02.png
+   :width: 777
+   :height: 241
+   :alt: Network tab with persistent logs and requests
+
+Here we see every request that has been made when reloading the page
+and can inspect each request and its response. So let's find out
+where our quotes are coming from:
+
+First click on the request with the name ``scroll``. On the right
+you can now inspect the request. In ``Headers`` you'll find details
+about the request headers, such as the URL, the method, the IP-address,
+and so on. We'll ignore the other tabs and click directly on ``Response``.
+
+What you should see in the ``Preview`` pane is the rendered HTML-code,
+that is exactly what we saw when we called ``view(response)`` in the
+shell. Accordingly the ``type`` of the request in the log is ``html``.
+The other requests have types like ``css`` or ``js``, but what
+interests us is the one request called ``quotes?page=1`` with the
+type ``json``.
+
+If we click on this request, we see that the request URL is
+``https://quotes.toscrape.com/api/quotes?page=1`` and the response
+is a JSON-object that contains our quotes. We can also right-click
+on the request and open ``Open in new tab`` to get a better overview.
+
+.. image:: _images/network_03.png
+   :width: 777
+   :height: 375
+   :alt: JSON-object returned from the quotes.toscrape API
+
+With this response we can now easily parse the JSON-object and
+also request each page to get every quote on the site:
+
+.. code-block:: python
+
+    import scrapy
+    import json
+
+
+    class QuoteSpider(scrapy.Spider):
+        name = "quote"
+        allowed_domains = ["quotes.toscrape.com"]
+        page = 1
+        start_urls = ["https://quotes.toscrape.com/api/quotes?page=1"]
+
+        def parse(self, response):
+            data = json.loads(response.text)
+            for quote in data["quotes"]:
+                yield {"quote": quote["text"]}
+            if data["has_next"]:
+                self.page += 1
+                url = f"https://quotes.toscrape.com/api/quotes?page={self.page}"
+                yield scrapy.Request(url=url, callback=self.parse)
+
+This spider starts at the first page of the quotes-API. With each
+response, we parse the ``response.text`` and assign it to ``data``.
+This lets us operate on the JSON-object like on a Python dictionary.
+We iterate through the ``quotes`` and print out the ``quote["text"]``.
+If the handy ``has_next`` element is ``true`` (try loading
+`quotes.toscrape.com/api/quotes?page=10`_ in your browser or a
+page-number greater than 10), we increment the ``page`` attribute
+and ``yield`` a new request, inserting the incremented page-number
+into our ``url``.
+
+.. _requests-from-curl:
+
+In more complex websites, it could be difficult to easily reproduce the
+requests, as we could need to add ``headers`` or ``cookies`` to make it work.
+In those cases you can export the requests in `cURL <https://curl.se/>`_
+format, by right-clicking on each of them in the network tool and using the
+:meth:`~scrapy.Request.from_curl()` method to generate an equivalent
+request:
+
+.. code-block:: python
+
+    from scrapy import Request
+
+    request = Request.from_curl(
+        "curl 'https://quotes.toscrape.com/api/quotes?page=1' -H 'User-Agent: Mozil"
+        "la/5.0 (X11; Linux x86_64; rv:67.0) Gecko/20100101 Firefox/67.0' -H 'Acce"
+        "pt: */*' -H 'Accept-Language: ca,en-US;q=0.7,en;q=0.3' --compressed -H 'X"
+        "-Requested-With: XMLHttpRequest' -H 'Proxy-Authorization: Basic QFRLLTAzM"
+        "zEwZTAxLTk5MWUtNDFiNC1iZWRmLTJjNGI4M2ZiNDBmNDpAVEstMDMzMTBlMDEtOTkxZS00MW"
+        "I0LWJlZGYtMmM0YjgzZmI0MGY0' -H 'Connection: keep-alive' -H 'Referer: http"
+        "://quotes.toscrape.com/scroll' -H 'Cache-Control: max-age=0'"
+    )
+
+Alternatively, if you want to know the arguments needed to recreate that
+request you can use the :func:`~scrapy.utils.curl.curl_to_request_kwargs`
+function to get a dictionary with the equivalent arguments:
+
+.. autofunction:: scrapy.utils.curl.curl_to_request_kwargs
+
+Note that to translate a cURL command into a Scrapy request,
+you may use `curl2scrapy <https://michael-shub.github.io/curl2scrapy/>`_.
+
+As you can see, with a few inspections in the `Network`-tool we
+were able to easily replicate the dynamic requests of the scrolling
+functionality of the page. Crawling dynamic pages can be quite
+daunting and pages can be very complex, but it (mostly) boils down
+to identifying the correct request and replicating it in your spider.
+
+.. _Developer Tools: https://en.wikipedia.org/wiki/Web_development_tools
+.. _quotes.toscrape.com: https://quotes.toscrape.com
+.. _quotes.toscrape.com/scroll: https://quotes.toscrape.com/scroll
+.. _quotes.toscrape.com/api/quotes?page=10: https://quotes.toscrape.com/api/quotes?page=10
+.. _has-class-extension: https://parsel.readthedocs.io/en/latest/usage.html#other-xpath-extensions
+
+
+
+--- END OF developer-tools_使用浏览器的开发者工具进行抓取.txt ---
+
+.. _topics-dynamic-content:
+
+====================================
+Selecting dynamically-loaded content
+====================================
+
+Some webpages show the desired data when you load them in a web browser.
+However, when you download them using Scrapy, you cannot reach the desired data
+using :ref:`selectors <topics-selectors>`.
+
+When this happens, the recommended approach is to
+:ref:`find the data source <topics-finding-data-source>` and extract the data
+from it.
+
+If you fail to do that, and you can nonetheless access the desired data through
+the :ref:`DOM <topics-livedom>` from your web browser, see
+:ref:`topics-headless-browsing`.
+
+.. _topics-finding-data-source:
+
+Finding the data source
+=======================
+
+To extract the desired data, you must first find its source location.
+
+If the data is in a non-text-based format, such as an image or a PDF document,
+use the :ref:`network tool <topics-network-tool>` of your web browser to find
+the corresponding request, and :ref:`reproduce it
+<topics-reproducing-requests>`.
+
+If your web browser lets you select the desired data as text, the data may be
+defined in embedded JavaScript code, or loaded from an external resource in a
+text-based format.
+
+In that case, you can use a tool like wgrep_ to find the URL of that resource.
+
+If the data turns out to come from the original URL itself, you must
+:ref:`inspect the source code of the webpage <topics-inspecting-source>` to
+determine where the data is located.
+
+If the data comes from a different URL, you will need to :ref:`reproduce the
+corresponding request <topics-reproducing-requests>`.
+
+.. _topics-inspecting-source:
+
+Inspecting the source code of a webpage
+=======================================
+
+Sometimes you need to inspect the source code of a webpage (not the
+:ref:`DOM <topics-livedom>`) to determine where some desired data is located.
+
+Use Scrapy’s :command:`fetch` command to download the webpage contents as seen
+by Scrapy::
+
+    scrapy fetch --nolog https://example.com > response.html
+
+If the desired data is in embedded JavaScript code within a ``<script/>``
+element, see :ref:`topics-parsing-javascript`.
+
+If you cannot find the desired data, first make sure it’s not just Scrapy:
+download the webpage with an HTTP client like curl_ or wget_ and see if the
+information can be found in the response they get.
+
+If they get a response with the desired data, modify your Scrapy
+:class:`~scrapy.Request` to match that of the other HTTP client. For
+example, try using the same user-agent string (:setting:`USER_AGENT`) or the
+same :attr:`~scrapy.Request.headers`.
+
+If they also get a response without the desired data, you’ll need to take
+steps to make your request more similar to that of the web browser. See
+:ref:`topics-reproducing-requests`.
+
+.. _topics-reproducing-requests:
+
+Reproducing requests
+====================
+
+Sometimes we need to reproduce a request the way our web browser performs it.
+
+Use the :ref:`network tool <topics-network-tool>` of your web browser to see
+how your web browser performs the desired request, and try to reproduce that
+request with Scrapy.
+
+It might be enough to yield a :class:`~scrapy.Request` with the same HTTP
+method and URL. However, you may also need to reproduce the body, headers and
+form parameters (see :class:`~scrapy.FormRequest`) of that request.
+
+As all major browsers allow to export the requests in curl_ format, Scrapy
+incorporates the method :meth:`~scrapy.Request.from_curl()` to generate an equivalent
+:class:`~scrapy.Request` from a cURL command. To get more information
+visit :ref:`request from curl <requests-from-curl>` inside the network
+tool section.
+
+Once you get the expected response, you can :ref:`extract the desired data from
+it <topics-handling-response-formats>`.
+
+You can reproduce any request with Scrapy. However, some times reproducing all
+necessary requests may not seem efficient in developer time. If that is your
+case, and crawling speed is not a major concern for you, you can alternatively
+consider :ref:`using a headless browser <topics-headless-browsing>`.
+
+If you get the expected response `sometimes`, but not always, the issue is
+probably not your request, but the target server. The target server might be
+buggy, overloaded, or :ref:`banning <bans>` some of your requests.
+
+Note that to translate a cURL command into a Scrapy request,
+you may use `curl2scrapy <https://michael-shub.github.io/curl2scrapy/>`_.
+
+.. _topics-handling-response-formats:
+
+Handling different response formats
+===================================
+
+Once you have a response with the desired data, how you extract the desired
+data from it depends on the type of response:
+
+-   If the response is HTML, XML or JSON, use :ref:`selectors
+    <topics-selectors>` as usual.
+
+-   If the response is JSON, use :func:`response.json()
+    <scrapy.http.TextResponse.json>` to load the desired data:
+
+    .. code-block:: python
+
+        data = response.json()
+
+    If the desired data is inside HTML or XML code embedded within JSON data,
+    you can load that HTML or XML code into a
+    :class:`~scrapy.Selector` and then
+    :ref:`use it <topics-selectors>` as usual:
+
+    .. code-block:: python
+
+        selector = Selector(data["html"])
+
+-   If the response is JavaScript, or HTML with a ``<script/>`` element
+    containing the desired data, see :ref:`topics-parsing-javascript`.
+
+-   If the response is CSS, use a :doc:`regular expression <library/re>` to
+    extract the desired data from
+    :attr:`response.text <scrapy.http.TextResponse.text>`.
+
+.. _topics-parsing-images:
+
+-   If the response is an image or another format based on images (e.g. PDF),
+    read the response as bytes from
+    :attr:`response.body <scrapy.http.Response.body>` and use an OCR
+    solution to extract the desired data as text.
+
+    For example, you can use pytesseract_. To read a table from a PDF,
+    `tabula-py`_ may be a better choice.
+
+-   If the response is SVG, or HTML with embedded SVG containing the desired
+    data, you may be able to extract the desired data using
+    :ref:`selectors <topics-selectors>`, since SVG is based on XML.
+
+    Otherwise, you might need to convert the SVG code into a raster image, and
+    :ref:`handle that raster image <topics-parsing-images>`.
+
+.. _topics-parsing-javascript:
+
+Parsing JavaScript code
+=======================
+
+If the desired data is hardcoded in JavaScript, you first need to get the
+JavaScript code:
+
+-   If the JavaScript code is in a JavaScript file, simply read
+    :attr:`response.text <scrapy.http.TextResponse.text>`.
+
+-   If the JavaScript code is within a ``<script/>`` element of an HTML page,
+    use :ref:`selectors <topics-selectors>` to extract the text within that
+    ``<script/>`` element.
+
+Once you have a string with the JavaScript code, you can extract the desired
+data from it:
+
+-   You might be able to use a :doc:`regular expression <library/re>` to
+    extract the desired data in JSON format, which you can then parse with
+    :func:`json.loads`.
+
+    For example, if the JavaScript code contains a separate line like
+    ``var data = {"field": "value"};`` you can extract that data as follows:
+
+    .. code-block:: pycon
+
+        >>> pattern = r"\bvar\s+data\s*=\s*(\{.*?\})\s*;\s*\n"
+        >>> json_data = response.css("script::text").re_first(pattern)
+        >>> json.loads(json_data)
+        {'field': 'value'}
+
+-   chompjs_ provides an API to parse JavaScript objects into a :class:`dict`.
+
+    For example, if the JavaScript code contains
+    ``var data = {field: "value", secondField: "second value"};``
+    you can extract that data as follows:
+
+    .. code-block:: pycon
+
+        >>> import chompjs
+        >>> javascript = response.css("script::text").get()
+        >>> data = chompjs.parse_js_object(javascript)
+        >>> data
+        {'field': 'value', 'secondField': 'second value'}
+
+-   Otherwise, use js2xml_ to convert the JavaScript code into an XML document
+    that you can parse using :ref:`selectors <topics-selectors>`.
+
+    For example, if the JavaScript code contains
+    ``var data = {field: "value"};`` you can extract that data as follows:
+
+    .. code-block:: pycon
+
+        >>> import js2xml
+        >>> import lxml.etree
+        >>> from parsel import Selector
+        >>> javascript = response.css("script::text").get()
+        >>> xml = lxml.etree.tostring(js2xml.parse(javascript), encoding="unicode")
+        >>> selector = Selector(text=xml)
+        >>> selector.css('var[name="data"]').get()
+        '<var name="data"><object><property name="field"><string>value</string></property></object></var>'
+
+.. _topics-headless-browsing:
+
+Using a headless browser
+========================
+
+On webpages that fetch data from additional requests, reproducing those
+requests that contain the desired data is the preferred approach. The effort is
+often worth the result: structured, complete data with minimum parsing time and
+network transfer.
+
+However, sometimes it can be really hard to reproduce certain requests. Or you
+may need something that no request can give you, such as a screenshot of a
+webpage as seen in a web browser. In this case using a `headless browser`_ will
+help.
+
+A headless browser is a special web browser that provides an API for
+automation. By installing the :ref:`asyncio reactor <install-asyncio>`,
+it is possible to integrate ``asyncio``-based libraries which handle headless browsers.
+
+One such library is `playwright-python`_ (an official Python port of `playwright`_).
+The following is a simple snippet to illustrate its usage within a Scrapy spider:
+
+.. code-block:: python
+
+    import scrapy
+    from playwright.async_api import async_playwright
+
+
+    class PlaywrightSpider(scrapy.Spider):
+        name = "playwright"
+        start_urls = ["data:,"]  # avoid using the default Scrapy downloader
+
+        async def parse(self, response):
+            async with async_playwright() as pw:
+                browser = await pw.chromium.launch()
+                page = await browser.new_page()
+                await page.goto("https://example.org")
+                title = await page.title()
+                return {"title": title}
+
+
+However, using `playwright-python`_ directly as in the above example
+circumvents most of the Scrapy components (middlewares, dupefilter, etc).
+We recommend using `scrapy-playwright`_ for a better integration.
+
+.. _AJAX: https://en.wikipedia.org/wiki/Ajax_%28programming%29
+.. _CSS: https://en.wikipedia.org/wiki/Cascading_Style_Sheets
+.. _JavaScript: https://en.wikipedia.org/wiki/JavaScript
+.. _chompjs: https://github.com/Nykakin/chompjs
+.. _curl: https://curl.se/
+.. _headless browser: https://en.wikipedia.org/wiki/Headless_browser
+.. _js2xml: https://github.com/scrapinghub/js2xml
+.. _playwright-python: https://github.com/microsoft/playwright-python
+.. _playwright: https://github.com/microsoft/playwright
+.. _pyppeteer: https://pyppeteer.github.io/pyppeteer/
+.. _pytesseract: https://github.com/madmaze/pytesseract
+.. _scrapy-playwright: https://github.com/scrapy-plugins/scrapy-playwright
+.. _tabula-py: https://github.com/chezou/tabula-py
+.. _wget: https://www.gnu.org/software/wget/
+.. _wgrep: https://github.com/stav/wgrep
+
+
+--- END OF dynamic-content_选择动态加载的内容.txt ---
+

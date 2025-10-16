@@ -1,0 +1,1830 @@
+.. _topics-leaks:
+
+======================
+Debugging memory leaks
+======================
+
+In Scrapy, objects such as requests, responses and items have a finite
+lifetime: they are created, used for a while, and finally destroyed.
+
+From all those objects, the Request is probably the one with the longest
+lifetime, as it stays waiting in the Scheduler queue until it's time to process
+it. For more info see :ref:`topics-architecture`.
+
+As these Scrapy objects have a (rather long) lifetime, there is always the risk
+of accumulating them in memory without releasing them properly and thus causing
+what is known as a "memory leak".
+
+To help debugging memory leaks, Scrapy provides a built-in mechanism for
+tracking objects references called :ref:`trackref <topics-leaks-trackrefs>`,
+and you can also use a third-party library called :ref:`muppy
+<topics-leaks-muppy>` for more advanced memory debugging (see below for more
+info). Both mechanisms must be used from the :ref:`Telnet Console
+<topics-telnetconsole>`.
+
+Common causes of memory leaks
+=============================
+
+It happens quite often (sometimes by accident, sometimes on purpose) that the
+Scrapy developer passes objects referenced in Requests (for example, using the
+:attr:`~scrapy.Request.cb_kwargs` or :attr:`~scrapy.Request.meta`
+attributes or the request callback function) and that effectively bounds the
+lifetime of those referenced objects to the lifetime of the Request. This is,
+by far, the most common cause of memory leaks in Scrapy projects, and a quite
+difficult one to debug for newcomers.
+
+In big projects, the spiders are typically written by different people and some
+of those spiders could be "leaking" and thus affecting the rest of the other
+(well-written) spiders when they get to run concurrently, which, in turn,
+affects the whole crawling process.
+
+The leak could also come from a custom middleware, pipeline or extension that
+you have written, if you are not releasing the (previously allocated) resources
+properly. For example, allocating resources on :signal:`spider_opened`
+but not releasing them on :signal:`spider_closed` may cause problems if
+you're running :ref:`multiple spiders per process <run-multiple-spiders>`.
+
+Too Many Requests?
+------------------
+
+By default Scrapy keeps the request queue in memory; it includes
+:class:`~scrapy.Request` objects and all objects
+referenced in Request attributes (e.g. in :attr:`~scrapy.Request.cb_kwargs`
+and :attr:`~scrapy.Request.meta`).
+While not necessarily a leak, this can take a lot of memory. Enabling
+:ref:`persistent job queue <topics-jobs>` could help keeping memory usage
+in control.
+
+.. _topics-leaks-trackrefs:
+
+Debugging memory leaks with ``trackref``
+========================================
+
+:mod:`trackref` is a module provided by Scrapy to debug the most common cases of
+memory leaks. It basically tracks the references to all live Request,
+Response, Item, Spider and Selector objects.
+
+You can enter the telnet console and inspect how many objects (of the classes
+mentioned above) are currently alive using the ``prefs()`` function which is an
+alias to the :func:`~scrapy.utils.trackref.print_live_refs` function::
+
+    telnet localhost 6023
+
+    .. code-block:: pycon
+
+        >>> prefs()
+        Live References
+
+        ExampleSpider                       1   oldest: 15s ago
+        HtmlResponse                       10   oldest: 1s ago
+        Selector                            2   oldest: 0s ago
+        FormRequest                       878   oldest: 7s ago
+
+As you can see, that report also shows the "age" of the oldest object in each
+class. If you're running multiple spiders per process chances are you can
+figure out which spider is leaking by looking at the oldest request or response.
+You can get the oldest object of each class using the
+:func:`~scrapy.utils.trackref.get_oldest` function (from the telnet console).
+
+Which objects are tracked?
+--------------------------
+
+The objects tracked by ``trackrefs`` are all from these classes (and all its
+subclasses):
+
+* :class:`scrapy.Request`
+* :class:`scrapy.http.Response`
+* :class:`scrapy.Item`
+* :class:`scrapy.Selector`
+* :class:`scrapy.Spider`
+
+A real example
+--------------
+
+Let's see a concrete example of a hypothetical case of memory leaks.
+Suppose we have some spider with a line similar to this one::
+
+    return Request(f"http://www.somenastyspider.com/product.php?pid={product_id}",
+                   callback=self.parse, cb_kwargs={'referer': response})
+
+That line is passing a response reference inside a request which effectively
+ties the response lifetime to the requests' one, and that would definitely
+cause memory leaks.
+
+Let's see how we can discover the cause (without knowing it
+a priori, of course) by using the ``trackref`` tool.
+
+After the crawler is running for a few minutes and we notice its memory usage
+has grown a lot, we can enter its telnet console and check the live
+references:
+
+.. code-block:: pycon
+
+    >>> prefs()
+    Live References
+
+    SomenastySpider                     1   oldest: 15s ago
+    HtmlResponse                     3890   oldest: 265s ago
+    Selector                            2   oldest: 0s ago
+    Request                          3878   oldest: 250s ago
+
+The fact that there are so many live responses (and that they're so old) is
+definitely suspicious, as responses should have a relatively short lifetime
+compared to Requests. The number of responses is similar to the number
+of requests, so it looks like they are tied in a some way. We can now go
+and check the code of the spider to discover the nasty line that is
+generating the leaks (passing response references inside requests).
+
+Sometimes extra information about live objects can be helpful.
+Let's check the oldest response:
+
+.. code-block:: pycon
+
+    >>> from scrapy.utils.trackref import get_oldest
+    >>> r = get_oldest("HtmlResponse")
+    >>> r.url
+    'http://www.somenastyspider.com/product.php?pid=123'
+
+If you want to iterate over all objects, instead of getting the oldest one, you
+can use the :func:`scrapy.utils.trackref.iter_all` function:
+
+.. code-block:: pycon
+
+    >>> from scrapy.utils.trackref import iter_all
+    >>> [r.url for r in iter_all("HtmlResponse")]
+    ['http://www.somenastyspider.com/product.php?pid=123',
+    'http://www.somenastyspider.com/product.php?pid=584',
+    ...]
+
+Too many spiders?
+-----------------
+
+If your project has too many spiders executed in parallel,
+the output of :func:`prefs()` can be difficult to read.
+For this reason, that function has a ``ignore`` argument which can be used to
+ignore a particular class (and all its subclasses). For
+example, this won't show any live references to spiders:
+
+.. code-block:: pycon
+
+    >>> from scrapy.spiders import Spider
+    >>> prefs(ignore=Spider)
+
+.. module:: scrapy.utils.trackref
+   :synopsis: Track references of live objects
+
+scrapy.utils.trackref module
+----------------------------
+
+Here are the functions available in the :mod:`~scrapy.utils.trackref` module.
+
+.. class:: object_ref
+
+    Inherit from this class if you want to track live
+    instances with the ``trackref`` module.
+
+.. function:: print_live_refs(class_name, ignore=NoneType)
+
+    Print a report of live references, grouped by class name.
+
+    :param ignore: if given, all objects from the specified class (or tuple of
+        classes) will be ignored.
+    :type ignore: type or tuple
+
+.. function:: get_oldest(class_name)
+
+    Return the oldest object alive with the given class name, or ``None`` if
+    none is found. Use :func:`print_live_refs` first to get a list of all
+    tracked live objects per class name.
+
+.. function:: iter_all(class_name)
+
+    Return an iterator over all objects alive with the given class name, or
+    ``None`` if none is found. Use :func:`print_live_refs` first to get a list
+    of all tracked live objects per class name.
+
+.. _topics-leaks-muppy:
+
+Debugging memory leaks with muppy
+=================================
+
+``trackref`` provides a very convenient mechanism for tracking down memory
+leaks, but it only keeps track of the objects that are more likely to cause
+memory leaks. However, there are other cases where the memory leaks could come
+from other (more or less obscure) objects. If this is your case, and you can't
+find your leaks using ``trackref``, you still have another resource: the muppy
+library.
+
+You can use muppy from `Pympler`_.
+
+.. _Pympler: https://pypi.org/project/Pympler/
+
+If you use ``pip``, you can install muppy with the following command::
+
+    pip install Pympler
+
+Here's an example to view all Python objects available in
+the heap using muppy:
+
+.. code-block:: pycon
+
+    >>> from pympler import muppy
+    >>> all_objects = muppy.get_objects()
+    >>> len(all_objects)
+    28667
+    >>> from pympler import summary
+    >>> suml = summary.summarize(all_objects)
+    >>> summary.print_(suml)
+                                   types |   # objects |   total size
+    ==================================== | =========== | ============
+                             <class 'str |        9822 |      1.10 MB
+                            <class 'dict |        1658 |    856.62 KB
+                            <class 'type |         436 |    443.60 KB
+                            <class 'code |        2974 |    419.56 KB
+              <class '_io.BufferedWriter |           2 |    256.34 KB
+                             <class 'set |         420 |    159.88 KB
+              <class '_io.BufferedReader |           1 |    128.17 KB
+              <class 'wrapper_descriptor |        1130 |     88.28 KB
+                           <class 'tuple |        1304 |     86.57 KB
+                         <class 'weakref |        1013 |     79.14 KB
+      <class 'builtin_function_or_method |         958 |     67.36 KB
+               <class 'method_descriptor |         865 |     60.82 KB
+                     <class 'abc.ABCMeta |          62 |     59.96 KB
+                            <class 'list |         446 |     58.52 KB
+                             <class 'int |        1425 |     43.20 KB
+
+For more info about muppy, refer to the `muppy documentation`_.
+
+.. _muppy documentation: https://pythonhosted.org/Pympler/muppy.html
+
+.. _topics-leaks-without-leaks:
+
+Leaks without leaks
+===================
+
+Sometimes, you may notice that the memory usage of your Scrapy process will
+only increase, but never decrease. Unfortunately, this could happen even
+though neither Scrapy nor your project are leaking memory. This is due to a
+(not so well) known problem of Python, which may not return released memory to
+the operating system in some cases. For more information on this issue see:
+
+* `Python Memory Management <https://www.evanjones.ca/python-memory.html>`_
+* `Python Memory Management Part 2 <https://www.evanjones.ca/python-memory-part2.html>`_
+* `Python Memory Management Part 3 <https://www.evanjones.ca/python-memory-part3.html>`_
+
+The improvements proposed by Evan Jones, which are detailed in `this paper`_,
+got merged in Python 2.5, but this only reduces the problem, it doesn't fix it
+completely. To quote the paper:
+
+    *Unfortunately, this patch can only free an arena if there are no more
+    objects allocated in it anymore. This means that fragmentation is a large
+    issue. An application could have many megabytes of free memory, scattered
+    throughout all the arenas, but it will be unable to free any of it. This is
+    a problem experienced by all memory allocators. The only way to solve it is
+    to move to a compacting garbage collector, which is able to move objects in
+    memory. This would require significant changes to the Python interpreter.*
+
+.. _this paper: https://www.evanjones.ca/memoryallocator/
+
+To keep memory consumption reasonable you can split the job into several
+smaller jobs or enable :ref:`persistent job queue <topics-jobs>`
+and stop/start spider from time to time.
+
+
+--- END OF leaks_调试内存泄漏.txt ---
+
+.. _topics-media-pipeline:
+
+===========================================
+Downloading and processing files and images
+===========================================
+
+.. currentmodule:: scrapy.pipelines.images
+
+Scrapy provides reusable :doc:`item pipelines </topics/item-pipeline>` for
+downloading files attached to a particular item (for example, when you scrape
+products and also want to download their images locally). These pipelines share
+a bit of functionality and structure (we refer to them as media pipelines), but
+typically you'll either use the Files Pipeline or the Images Pipeline.
+
+Both pipelines implement these features:
+
+* Avoid re-downloading media that was downloaded recently
+* Specifying where to store the media (filesystem directory, FTP server, Amazon S3 bucket,
+  Google Cloud Storage bucket)
+
+The Images Pipeline has a few extra functions for processing images:
+
+* Convert all downloaded images to a common format (JPG) and mode (RGB)
+* Thumbnail generation
+* Check images width/height to make sure they meet a minimum constraint
+
+The pipelines also keep an internal queue of those media URLs which are currently
+being scheduled for download, and connect those responses that arrive containing
+the same media to that queue. This avoids downloading the same media more than
+once when it's shared by several items.
+
+Using the Files Pipeline
+========================
+
+The typical workflow, when using the :class:`FilesPipeline` goes like
+this:
+
+1. In a Spider, you scrape an item and put the URLs of the desired into a
+   ``file_urls`` field.
+
+2. The item is returned from the spider and goes to the item pipeline.
+
+3. When the item reaches the :class:`FilesPipeline`, the URLs in the
+   ``file_urls`` field are scheduled for download using the standard
+   Scrapy scheduler and downloader (which means the scheduler and downloader
+   middlewares are reused), but with a higher priority, processing them before other
+   pages are scraped. The item remains "locked" at that particular pipeline stage
+   until the files have finish downloading (or fail for some reason).
+
+4. When the files are downloaded, another field (``files``) will be populated
+   with the results. This field will contain a list of dicts with information
+   about the downloaded files, such as the downloaded path, the original
+   scraped url (taken from the ``file_urls`` field), the file checksum and the file status.
+   The files in the list of the ``files`` field will retain the same order of
+   the original ``file_urls`` field. If some file failed downloading, an
+   error will be logged and the file won't be present in the ``files`` field.
+
+
+.. _images-pipeline:
+
+Using the Images Pipeline
+=========================
+
+Using the :class:`ImagesPipeline` is a lot like using the :class:`FilesPipeline`,
+except the default field names used are different: you use ``image_urls`` for
+the image URLs of an item and it will populate an ``images`` field for the information
+about the downloaded images.
+
+The advantage of using the :class:`ImagesPipeline` for image files is that you
+can configure some extra functions like generating thumbnails and filtering
+the images based on their size.
+
+The Images Pipeline requires Pillow_ 8.0.0 or greater. It is used for
+thumbnailing and normalizing images to JPEG/RGB format.
+
+.. _Pillow: https://github.com/python-pillow/Pillow
+
+
+.. _topics-media-pipeline-enabling:
+
+Enabling your Media Pipeline
+============================
+
+.. setting:: IMAGES_STORE
+.. setting:: FILES_STORE
+
+To enable your media pipeline you must first add it to your project
+:setting:`ITEM_PIPELINES` setting.
+
+For Images Pipeline, use:
+
+.. code-block:: python
+
+    ITEM_PIPELINES = {"scrapy.pipelines.images.ImagesPipeline": 1}
+
+For Files Pipeline, use:
+
+.. code-block:: python
+
+    ITEM_PIPELINES = {"scrapy.pipelines.files.FilesPipeline": 1}
+
+.. note::
+    You can also use both the Files and Images Pipeline at the same time.
+
+
+Then, configure the target storage setting to a valid value that will be used
+for storing the downloaded images. Otherwise the pipeline will remain disabled,
+even if you include it in the :setting:`ITEM_PIPELINES` setting.
+
+For the Files Pipeline, set the :setting:`FILES_STORE` setting:
+
+.. code-block:: python
+
+   FILES_STORE = "/path/to/valid/dir"
+
+For the Images Pipeline, set the :setting:`IMAGES_STORE` setting:
+
+.. code-block:: python
+
+   IMAGES_STORE = "/path/to/valid/dir"
+
+.. _topics-file-naming:
+
+File Naming
+===========
+
+Default File Naming
+-------------------
+
+By default, files are stored using an `SHA-1 hash`_ of their URLs for the file names.
+
+For example, the following image URL::
+
+    http://www.example.com/image.jpg
+
+Whose ``SHA-1 hash`` is::
+
+    3afec3b4765f8f0a07b78f98c07b83f013567a0a
+
+Will be downloaded and stored using your chosen :ref:`storage method <topics-supported-storage>` and the following file name::
+
+   3afec3b4765f8f0a07b78f98c07b83f013567a0a.jpg
+
+Custom File Naming
+-------------------
+
+You may wish to use a different calculated file name for saved files.
+For example, classifying an image by including meta in the file name.
+
+Customize file names by overriding the ``file_path`` method of your
+media pipeline.
+
+For example, an image pipeline with image URL::
+
+   http://www.example.com/product/images/large/front/0000000004166
+
+Can be processed into a file name with a condensed hash and the perspective
+``front``::
+
+  00b08510e4_front.jpg
+
+By overriding ``file_path`` like this:
+
+.. code-block:: python
+
+  import hashlib
+
+
+  def file_path(self, request, response=None, info=None, *, item=None):
+      image_url_hash = hashlib.shake_256(request.url.encode()).hexdigest(5)
+      image_perspective = request.url.split("/")[-2]
+      image_filename = f"{image_url_hash}_{image_perspective}.jpg"
+
+      return image_filename
+
+.. warning::
+  If your custom file name scheme relies on meta data that can vary between
+  scrapes it may lead to unexpected re-downloading of existing media using
+  new file names.
+
+  For example, if your custom file name scheme uses a product title and the
+  site changes an item's product title between scrapes, Scrapy will re-download
+  the same media using updated file names.
+
+For more information about the ``file_path`` method, see :ref:`topics-media-pipeline-override`.
+
+.. _topics-supported-storage:
+
+Supported Storage
+=================
+
+File system storage
+-------------------
+
+File system storage will save files to the following path::
+
+   <IMAGES_STORE>/full/<FILE_NAME>
+
+Where:
+
+* ``<IMAGES_STORE>`` is the directory defined in :setting:`IMAGES_STORE` setting
+  for the Images Pipeline.
+
+* ``full`` is a sub-directory to separate full images from thumbnails (if
+  used). For more info see :ref:`topics-images-thumbnails`.
+
+* ``<FILE_NAME>`` is the file name assigned to the file.  For more info see :ref:`topics-file-naming`.
+
+
+.. _media-pipeline-ftp:
+
+FTP server storage
+------------------
+
+.. versionadded:: 2.0
+
+:setting:`FILES_STORE` and :setting:`IMAGES_STORE` can point to an FTP server.
+Scrapy will automatically upload the files to the server.
+
+:setting:`FILES_STORE` and :setting:`IMAGES_STORE` should be written in one of the
+following forms::
+
+    ftp://username:password@address:port/path
+    ftp://address:port/path
+
+If ``username`` and ``password`` are not provided, they are taken from the :setting:`FTP_USER` and
+:setting:`FTP_PASSWORD` settings respectively.
+
+FTP supports two different connection modes: active or passive. Scrapy uses
+the passive connection mode by default. To use the active connection mode instead,
+set the :setting:`FEED_STORAGE_FTP_ACTIVE` setting to ``True``.
+
+.. _media-pipelines-s3:
+
+Amazon S3 storage
+-----------------
+
+.. setting:: FILES_STORE_S3_ACL
+.. setting:: IMAGES_STORE_S3_ACL
+
+If botocore_ >= 1.4.87 is installed, :setting:`FILES_STORE` and
+:setting:`IMAGES_STORE` can represent an Amazon S3 bucket. Scrapy will
+automatically upload the files to the bucket.
+
+For example, this is a valid :setting:`IMAGES_STORE` value:
+
+.. code-block:: python
+
+    IMAGES_STORE = "s3://bucket/images"
+
+You can modify the Access Control List (ACL) policy used for the stored files,
+which is defined by the :setting:`FILES_STORE_S3_ACL` and
+:setting:`IMAGES_STORE_S3_ACL` settings. By default, the ACL is set to
+``private``. To make the files publicly available use the ``public-read``
+policy:
+
+.. code-block:: python
+
+    IMAGES_STORE_S3_ACL = "public-read"
+
+For more information, see `canned ACLs`_ in the Amazon S3 Developer Guide.
+
+You can also use other S3-like storages. Storages like self-hosted `Minio`_ or
+`Zenko CloudServer`_. All you need to do is set endpoint option in you Scrapy
+settings:
+
+.. code-block:: python
+
+    AWS_ENDPOINT_URL = "http://minio.example.com:9000"
+
+For self-hosting you also might feel the need not to use SSL and not to verify SSL connection:
+
+.. code-block:: python
+
+    AWS_USE_SSL = False  # or True (None by default)
+    AWS_VERIFY = False  # or True (None by default)
+
+.. _botocore: https://github.com/boto/botocore
+.. _canned ACLs: https://docs.aws.amazon.com/AmazonS3/latest/userguide/acl-overview.html#canned-acl
+.. _Minio: https://github.com/minio/minio
+.. _Zenko CloudServer: https://www.zenko.io/cloudserver/
+
+
+.. _media-pipeline-gcs:
+
+Google Cloud Storage
+---------------------
+
+.. setting:: FILES_STORE_GCS_ACL
+.. setting:: IMAGES_STORE_GCS_ACL
+
+:setting:`FILES_STORE` and :setting:`IMAGES_STORE` can represent a Google Cloud Storage
+bucket. Scrapy will automatically upload the files to the bucket. (requires `google-cloud-storage`_ )
+
+.. _google-cloud-storage: https://cloud.google.com/storage/docs/reference/libraries#client-libraries-install-python
+
+For example, these are valid :setting:`IMAGES_STORE` and :setting:`GCS_PROJECT_ID` settings:
+
+.. code-block:: python
+
+    IMAGES_STORE = "gs://bucket/images/"
+    GCS_PROJECT_ID = "project_id"
+
+For information about authentication, see this `documentation`_.
+
+.. _documentation: https://cloud.google.com/docs/authentication
+
+You can modify the Access Control List (ACL) policy used for the stored files,
+which is defined by the :setting:`FILES_STORE_GCS_ACL` and
+:setting:`IMAGES_STORE_GCS_ACL` settings. By default, the ACL is set to
+``''`` (empty string) which means that Cloud Storage applies the bucket's default object ACL to the object.
+To make the files publicly available use the ``publicRead``
+policy:
+
+.. code-block:: python
+
+    IMAGES_STORE_GCS_ACL = "publicRead"
+
+For more information, see `Predefined ACLs`_ in the Google Cloud Platform Developer Guide.
+
+.. _Predefined ACLs: https://cloud.google.com/storage/docs/access-control/lists#predefined-acl
+
+Usage example
+=============
+
+.. setting:: FILES_URLS_FIELD
+.. setting:: FILES_RESULT_FIELD
+.. setting:: IMAGES_URLS_FIELD
+.. setting:: IMAGES_RESULT_FIELD
+
+In order to use a media pipeline, first :ref:`enable it
+<topics-media-pipeline-enabling>`.
+
+Then, if a spider returns an :ref:`item object <topics-items>` with the URLs
+field (``file_urls`` or ``image_urls``, for the Files or Images Pipeline
+respectively), the pipeline will put the results under the respective field
+(``files`` or ``images``).
+
+When using :ref:`item types <item-types>` for which fields are defined beforehand,
+you must define both the URLs field and the results field. For example, when
+using the images pipeline, items must define both the ``image_urls`` and the
+``images`` field. For instance, using the :class:`~scrapy.Item` class:
+
+.. code-block:: python
+
+    import scrapy
+
+
+    class MyItem(scrapy.Item):
+        # ... other item fields ...
+        image_urls = scrapy.Field()
+        images = scrapy.Field()
+
+If you want to use another field name for the URLs key or for the results key,
+it is also possible to override it.
+
+For the Files Pipeline, set :setting:`FILES_URLS_FIELD` and/or
+:setting:`FILES_RESULT_FIELD` settings:
+
+.. code-block:: python
+
+    FILES_URLS_FIELD = "field_name_for_your_files_urls"
+    FILES_RESULT_FIELD = "field_name_for_your_processed_files"
+
+For the Images Pipeline, set :setting:`IMAGES_URLS_FIELD` and/or
+:setting:`IMAGES_RESULT_FIELD` settings:
+
+.. code-block:: python
+
+    IMAGES_URLS_FIELD = "field_name_for_your_images_urls"
+    IMAGES_RESULT_FIELD = "field_name_for_your_processed_images"
+
+If you need something more complex and want to override the custom pipeline
+behaviour, see :ref:`topics-media-pipeline-override`.
+
+If you have multiple image pipelines inheriting from ImagePipeline and you want
+to have different settings in different pipelines you can set setting keys
+preceded with uppercase name of your pipeline class. E.g. if your pipeline is
+called MyPipeline and you want to have custom IMAGES_URLS_FIELD you define
+setting MYPIPELINE_IMAGES_URLS_FIELD and your custom settings will be used.
+
+
+Additional features
+===================
+
+.. _file-expiration:
+
+File expiration
+---------------
+
+.. setting:: IMAGES_EXPIRES
+.. setting:: FILES_EXPIRES
+
+The Image Pipeline avoids downloading files that were downloaded recently. To
+adjust this retention delay use the :setting:`FILES_EXPIRES` setting (or
+:setting:`IMAGES_EXPIRES`, in case of Images Pipeline), which
+specifies the delay in number of days:
+
+.. code-block:: python
+
+    # 120 days of delay for files expiration
+    FILES_EXPIRES = 120
+
+    # 30 days of delay for images expiration
+    IMAGES_EXPIRES = 30
+
+The default value for both settings is 90 days.
+
+If you have pipeline that subclasses FilesPipeline and you'd like to have
+different setting for it you can set setting keys preceded by uppercase
+class name. E.g. given pipeline class called MyPipeline you can set setting key:
+
+    MYPIPELINE_FILES_EXPIRES = 180
+
+and pipeline class MyPipeline will have expiration time set to 180.
+
+The last modified time from the file is used to determine the age of the file in days,
+which is then compared to the set expiration time to determine if the file is expired.
+
+.. _topics-images-thumbnails:
+
+Thumbnail generation for images
+-------------------------------
+
+The Images Pipeline can automatically create thumbnails of the downloaded
+images.
+
+.. setting:: IMAGES_THUMBS
+
+In order to use this feature, you must set :setting:`IMAGES_THUMBS` to a dictionary
+where the keys are the thumbnail names and the values are their dimensions.
+
+For example:
+
+.. code-block:: python
+
+   IMAGES_THUMBS = {
+       "small": (50, 50),
+       "big": (270, 270),
+   }
+
+When you use this feature, the Images Pipeline will create thumbnails of the
+each specified size with this format::
+
+    <IMAGES_STORE>/thumbs/<size_name>/<image_id>.jpg
+
+Where:
+
+* ``<size_name>`` is the one specified in the :setting:`IMAGES_THUMBS`
+  dictionary keys (``small``, ``big``, etc)
+
+* ``<image_id>`` is the `SHA-1 hash`_ of the image url
+
+.. _SHA-1 hash: https://en.wikipedia.org/wiki/SHA_hash_functions
+
+Example of image files stored using ``small`` and ``big`` thumbnail names::
+
+   <IMAGES_STORE>/full/63bbfea82b8880ed33cdb762aa11fab722a90a24.jpg
+   <IMAGES_STORE>/thumbs/small/63bbfea82b8880ed33cdb762aa11fab722a90a24.jpg
+   <IMAGES_STORE>/thumbs/big/63bbfea82b8880ed33cdb762aa11fab722a90a24.jpg
+
+The first one is the full image, as downloaded from the site.
+
+Filtering out small images
+--------------------------
+
+.. setting:: IMAGES_MIN_HEIGHT
+
+.. setting:: IMAGES_MIN_WIDTH
+
+When using the Images Pipeline, you can drop images which are too small, by
+specifying the minimum allowed size in the :setting:`IMAGES_MIN_HEIGHT` and
+:setting:`IMAGES_MIN_WIDTH` settings.
+
+For example::
+
+   IMAGES_MIN_HEIGHT = 110
+   IMAGES_MIN_WIDTH = 110
+
+.. note::
+    The size constraints don't affect thumbnail generation at all.
+
+It is possible to set just one size constraint or both. When setting both of
+them, only images that satisfy both minimum sizes will be saved. For the
+above example, images of sizes (105 x 105) or (105 x 200) or (200 x 105) will
+all be dropped because at least one dimension is shorter than the constraint.
+
+By default, there are no size constraints, so all images are processed.
+
+Allowing redirections
+---------------------
+
+.. setting:: MEDIA_ALLOW_REDIRECTS
+
+By default media pipelines ignore redirects, i.e. an HTTP redirection
+to a media file URL request will mean the media download is considered failed.
+
+To handle media redirections, set this setting to ``True``::
+
+    MEDIA_ALLOW_REDIRECTS = True
+
+.. _topics-media-pipeline-override:
+
+Extending the Media Pipelines
+=============================
+
+.. module:: scrapy.pipelines.files
+   :synopsis: Files Pipeline
+
+See here the methods that you can override in your custom Files Pipeline:
+
+.. class:: FilesPipeline
+
+   .. method:: file_path(self, request, response=None, info=None, *, item=None)
+
+      This method is called once per downloaded item. It returns the
+      download path of the file originating from the specified
+      :class:`response <scrapy.http.Response>`.
+
+      In addition to ``response``, this method receives the original
+      :class:`request <scrapy.Request>`,
+      :class:`info <scrapy.pipelines.media.MediaPipeline.SpiderInfo>` and
+      :class:`item <scrapy.Item>`
+
+      You can override this method to customize the download path of each file.
+
+      For example, if file URLs end like regular paths (e.g.
+      ``https://example.com/a/b/c/foo.png``), you can use the following
+      approach to download all files into the ``files`` folder with their
+      original filenames (e.g. ``files/foo.png``):
+
+      .. code-block:: python
+
+        from pathlib import PurePosixPath
+        from scrapy.utils.httpobj import urlparse_cached
+
+        from scrapy.pipelines.files import FilesPipeline
+
+
+        class MyFilesPipeline(FilesPipeline):
+            def file_path(self, request, response=None, info=None, *, item=None):
+                return "files/" + PurePosixPath(urlparse_cached(request).path).name
+
+      Similarly, you can use the ``item`` to determine the file path based on some item
+      property.
+
+      By default the :meth:`file_path` method returns
+      ``full/<request URL hash>.<extension>``.
+
+      .. versionadded:: 2.4
+         The *item* parameter.
+
+   .. method:: FilesPipeline.get_media_requests(item, info)
+
+      As seen on the workflow, the pipeline will get the URLs of the images to
+      download from the item. In order to do this, you can override the
+      :meth:`~get_media_requests` method and return a Request for each
+      file URL:
+
+      .. code-block:: python
+
+         from itemadapter import ItemAdapter
+
+
+         def get_media_requests(self, item, info):
+             adapter = ItemAdapter(item)
+             for file_url in adapter["file_urls"]:
+                 yield scrapy.Request(file_url)
+
+      Those requests will be processed by the pipeline and, when they have finished
+      downloading, the results will be sent to the
+      :meth:`~item_completed` method, as a list of 2-element tuples.
+      Each tuple will contain ``(success, file_info_or_error)`` where:
+
+      * ``success`` is a boolean which is ``True`` if the image was downloaded
+        successfully or ``False`` if it failed for some reason
+
+      * ``file_info_or_error`` is a dict containing the following keys (if
+        success is ``True``) or a :exc:`~twisted.python.failure.Failure` if
+        there was a problem.
+
+        * ``url`` - the url where the file was downloaded from. This is the url of
+          the request returned from the :meth:`~get_media_requests`
+          method.
+
+        * ``path`` - the path (relative to :setting:`FILES_STORE`) where the file
+          was stored
+
+        * ``checksum`` - a `MD5 hash`_ of the image contents
+
+        * ``status`` - the file status indication.
+
+          .. versionadded:: 2.2
+
+          It can be one of the following:
+
+          * ``downloaded`` - file was downloaded.
+          * ``uptodate`` - file was not downloaded, as it was downloaded recently,
+            according to the file expiration policy.
+          * ``cached`` - file was already scheduled for download, by another item
+            sharing the same file.
+
+      The list of tuples received by :meth:`~item_completed` is
+      guaranteed to retain the same order of the requests returned from the
+      :meth:`~get_media_requests` method.
+
+      Here's a typical value of the ``results`` argument:
+
+      .. invisible-code-block: python
+
+          from twisted.python.failure import Failure
+
+      .. code-block:: python
+
+          [
+              (
+                  True,
+                  {
+                      "checksum": "2b00042f7481c7b056c4b410d28f33cf",
+                      "path": "full/0a79c461a4062ac383dc4fade7bc09f1384a3910.jpg",
+                      "url": "http://www.example.com/files/product1.pdf",
+                      "status": "downloaded",
+                  },
+              ),
+              (False, Failure(...)),
+          ]
+
+      By default the :meth:`get_media_requests` method returns ``None`` which
+      means there are no files to download for the item.
+
+   .. method:: FilesPipeline.item_completed(results, item, info)
+
+      The :meth:`FilesPipeline.item_completed` method called when all file
+      requests for a single item have completed (either finished downloading, or
+      failed for some reason).
+
+      The :meth:`~item_completed` method must return the
+      output that will be sent to subsequent item pipeline stages, so you must
+      return (or drop) the item, as you would in any pipeline.
+
+      Here is an example of the :meth:`~item_completed` method where we
+      store the downloaded file paths (passed in results) in the ``file_paths``
+      item field, and we drop the item if it doesn't contain any files:
+
+      .. code-block:: python
+
+          from itemadapter import ItemAdapter
+          from scrapy.exceptions import DropItem
+
+
+          def item_completed(self, results, item, info):
+              file_paths = [x["path"] for ok, x in results if ok]
+              if not file_paths:
+                  raise DropItem("Item contains no files")
+              adapter = ItemAdapter(item)
+              adapter["file_paths"] = file_paths
+              return item
+
+      By default, the :meth:`item_completed` method returns the item.
+
+
+.. module:: scrapy.pipelines.images
+   :synopsis: Images Pipeline
+
+See here the methods that you can override in your custom Images Pipeline:
+
+.. class:: ImagesPipeline
+
+    The :class:`ImagesPipeline` is an extension of the :class:`FilesPipeline`,
+    customizing the field names and adding custom behavior for images.
+
+   .. method:: file_path(self, request, response=None, info=None, *, item=None)
+
+      This method is called once per downloaded item. It returns the
+      download path of the file originating from the specified
+      :class:`response <scrapy.http.Response>`.
+
+      In addition to ``response``, this method receives the original
+      :class:`request <scrapy.Request>`,
+      :class:`info <scrapy.pipelines.media.MediaPipeline.SpiderInfo>` and
+      :class:`item <scrapy.Item>`
+
+      You can override this method to customize the download path of each file.
+
+      For example, if file URLs end like regular paths (e.g.
+      ``https://example.com/a/b/c/foo.png``), you can use the following
+      approach to download all files into the ``files`` folder with their
+      original filenames (e.g. ``files/foo.png``):
+
+      .. code-block:: python
+
+        from pathlib import PurePosixPath
+        from scrapy.utils.httpobj import urlparse_cached
+
+        from scrapy.pipelines.images import ImagesPipeline
+
+
+        class MyImagesPipeline(ImagesPipeline):
+            def file_path(self, request, response=None, info=None, *, item=None):
+                return "files/" + PurePosixPath(urlparse_cached(request).path).name
+
+      Similarly, you can use the ``item`` to determine the file path based on some item
+      property.
+
+      By default the :meth:`file_path` method returns
+      ``full/<request URL hash>.<extension>``.
+
+      .. versionadded:: 2.4
+         The *item* parameter.
+
+   .. method:: ImagesPipeline.thumb_path(self, request, thumb_id, response=None, info=None, *, item=None)
+
+      This method is called for every item of  :setting:`IMAGES_THUMBS` per downloaded item. It returns the
+      thumbnail download path of the image originating from the specified
+      :class:`response <scrapy.http.Response>`.
+
+      In addition to ``response``, this method receives the original
+      :class:`request <scrapy.Request>`,
+      ``thumb_id``,
+      :class:`info <scrapy.pipelines.media.MediaPipeline.SpiderInfo>` and
+      :class:`item <scrapy.Item>`.
+
+      You can override this method to customize the thumbnail download path of each image.
+      You can use the ``item`` to determine the file path based on some item
+      property.
+
+      By default the :meth:`thumb_path` method returns
+      ``thumbs/<size name>/<request URL hash>.<extension>``.
+
+
+   .. method:: ImagesPipeline.get_media_requests(item, info)
+
+      Works the same way as :meth:`FilesPipeline.get_media_requests` method,
+      but using a different field name for image urls.
+
+      Must return a Request for each image URL.
+
+   .. method:: ImagesPipeline.item_completed(results, item, info)
+
+      The :meth:`ImagesPipeline.item_completed` method is called when all image
+      requests for a single item have completed (either finished downloading, or
+      failed for some reason).
+
+      Works the same way as :meth:`FilesPipeline.item_completed` method,
+      but using a different field names for storing image downloading results.
+
+      By default, the :meth:`item_completed` method returns the item.
+
+
+.. _media-pipeline-example:
+
+Custom Images pipeline example
+==============================
+
+Here is a full example of the Images Pipeline whose methods are exemplified
+above:
+
+.. code-block:: python
+
+    import scrapy
+    from itemadapter import ItemAdapter
+    from scrapy.exceptions import DropItem
+    from scrapy.pipelines.images import ImagesPipeline
+
+
+    class MyImagesPipeline(ImagesPipeline):
+        def get_media_requests(self, item, info):
+            for image_url in item["image_urls"]:
+                yield scrapy.Request(image_url)
+
+        def item_completed(self, results, item, info):
+            image_paths = [x["path"] for ok, x in results if ok]
+            if not image_paths:
+                raise DropItem("Item contains no images")
+            adapter = ItemAdapter(item)
+            adapter["image_paths"] = image_paths
+            return item
+
+
+To enable your custom media pipeline component you must add its class import path to the
+:setting:`ITEM_PIPELINES` setting, like in the following example:
+
+.. code-block:: python
+
+   ITEM_PIPELINES = {"myproject.pipelines.MyImagesPipeline": 300}
+
+.. _MD5 hash: https://en.wikipedia.org/wiki/MD5
+
+
+--- END OF media-pipeline_下载和处理文件和图像.txt ---
+
+.. _topics-autothrottle:
+
+======================
+AutoThrottle extension
+======================
+
+This is an extension for automatically throttling crawling speed based on load
+of both the Scrapy server and the website you are crawling.
+
+Design goals
+============
+
+1. be nicer to sites instead of using default download delay of zero
+2. automatically adjust Scrapy to the optimum crawling speed, so the user
+   doesn't have to tune the download delays to find the optimum one.
+   The user only needs to specify the maximum concurrent requests
+   it allows, and the extension does the rest.
+
+.. _autothrottle-algorithm:
+
+How it works
+============
+
+Scrapy allows defining the concurrency and delay of different download slots,
+e.g. through the :setting:`DOWNLOAD_SLOTS` setting. By default requests are
+assigned to slots based on their URL domain, although it is possible to
+customize the download slot of any request.
+
+The AutoThrottle extension adjusts the delay of each download slot dynamically,
+to make your spider send :setting:`AUTOTHROTTLE_TARGET_CONCURRENCY` concurrent
+requests on average to each remote website.
+
+It uses download latency to compute the delays. The main idea is the
+following: if a server needs ``latency`` seconds to respond, a client
+should send a request each ``latency/N`` seconds to have ``N`` requests
+processed in parallel.
+
+Instead of adjusting the delays one can just set a small fixed
+download delay and impose hard limits on concurrency using
+:setting:`CONCURRENT_REQUESTS_PER_DOMAIN` or
+:setting:`CONCURRENT_REQUESTS_PER_IP` options. It will provide a similar
+effect, but there are some important differences:
+
+* because the download delay is small there will be occasional bursts
+  of requests;
+* often non-200 (error) responses can be returned faster than regular
+  responses, so with a small download delay and a hard concurrency limit
+  crawler will be sending requests to server faster when server starts to
+  return errors. But this is an opposite of what crawler should do - in case
+  of errors it makes more sense to slow down: these errors may be caused by
+  the high request rate.
+
+AutoThrottle doesn't have these issues.
+
+Throttling algorithm
+====================
+
+AutoThrottle algorithm adjusts download delays based on the following rules:
+
+1. spiders always start with a download delay of
+   :setting:`AUTOTHROTTLE_START_DELAY`;
+2. when a response is received, the target download delay is calculated as
+   ``latency / N`` where ``latency`` is a latency of the response,
+   and ``N`` is :setting:`AUTOTHROTTLE_TARGET_CONCURRENCY`.
+3. download delay for next requests is set to the average of previous
+   download delay and the target download delay;
+4. latencies of non-200 responses are not allowed to decrease the delay;
+5. download delay can't become less than :setting:`DOWNLOAD_DELAY` or greater
+   than :setting:`AUTOTHROTTLE_MAX_DELAY`
+
+.. note:: The AutoThrottle extension honours the standard Scrapy settings for
+   concurrency and delay. This means that it will respect
+   :setting:`CONCURRENT_REQUESTS_PER_DOMAIN` and
+   :setting:`CONCURRENT_REQUESTS_PER_IP` options and
+   never set a download delay lower than :setting:`DOWNLOAD_DELAY`.
+
+.. _download-latency:
+
+In Scrapy, the download latency is measured as the time elapsed between
+establishing the TCP connection and receiving the HTTP headers.
+
+Note that these latencies are very hard to measure accurately in a cooperative
+multitasking environment because Scrapy may be busy processing a spider
+callback, for example, and unable to attend downloads. However, these latencies
+should still give a reasonable estimate of how busy Scrapy (and ultimately, the
+server) is, and this extension builds on that premise.
+
+.. reqmeta:: autothrottle_dont_adjust_delay
+
+Prevent specific requests from triggering slot delay adjustments
+================================================================
+
+AutoThrottle adjusts the delay of download slots based on the latencies of
+responses that belong to that download slot. The only exceptions are non-200
+responses, which are only taken into account to increase that delay, but
+ignored if they would decrease that delay.
+
+You can also set the ``autothrottle_dont_adjust_delay`` request metadata key to
+``True`` in any request to prevent its response latency from impacting the
+delay of its download slot:
+
+.. code-block:: python
+
+    from scrapy import Request
+
+    Request("https://example.com", meta={"autothrottle_dont_adjust_delay": True})
+
+Note, however, that AutoThrottle still determines the starting delay of every
+download slot by setting the ``download_delay`` attribute on the running
+spider. If you want AutoThrottle not to impact a download slot at all, in
+addition to setting this meta key in all requests that use that download slot,
+you might want to set a custom value for the ``delay`` attribute of that
+download slot, e.g. using :setting:`DOWNLOAD_SLOTS`.
+
+Settings
+========
+
+The settings used to control the AutoThrottle extension are:
+
+* :setting:`AUTOTHROTTLE_ENABLED`
+* :setting:`AUTOTHROTTLE_START_DELAY`
+* :setting:`AUTOTHROTTLE_MAX_DELAY`
+* :setting:`AUTOTHROTTLE_TARGET_CONCURRENCY`
+* :setting:`AUTOTHROTTLE_DEBUG`
+* :setting:`CONCURRENT_REQUESTS_PER_DOMAIN`
+* :setting:`CONCURRENT_REQUESTS_PER_IP`
+* :setting:`DOWNLOAD_DELAY`
+
+For more information see :ref:`autothrottle-algorithm`.
+
+.. setting:: AUTOTHROTTLE_ENABLED
+
+AUTOTHROTTLE_ENABLED
+~~~~~~~~~~~~~~~~~~~~
+
+Default: ``False``
+
+Enables the AutoThrottle extension.
+
+.. setting:: AUTOTHROTTLE_START_DELAY
+
+AUTOTHROTTLE_START_DELAY
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+Default: ``5.0``
+
+The initial download delay (in seconds).
+
+.. setting:: AUTOTHROTTLE_MAX_DELAY
+
+AUTOTHROTTLE_MAX_DELAY
+~~~~~~~~~~~~~~~~~~~~~~
+
+Default: ``60.0``
+
+The maximum download delay (in seconds) to be set in case of high latencies.
+
+.. setting:: AUTOTHROTTLE_TARGET_CONCURRENCY
+
+AUTOTHROTTLE_TARGET_CONCURRENCY
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Default: ``1.0``
+
+Average number of requests Scrapy should be sending in parallel to remote
+websites. It must be higher than ``0.0``.
+
+By default, AutoThrottle adjusts the delay to send a single
+concurrent request to each of the remote websites. Set this option to
+a higher value (e.g. ``2.0``) to increase the throughput and the load on remote
+servers. A lower ``AUTOTHROTTLE_TARGET_CONCURRENCY`` value
+(e.g. ``0.5``) makes the crawler more conservative and polite.
+
+Note that :setting:`CONCURRENT_REQUESTS_PER_DOMAIN`
+and :setting:`CONCURRENT_REQUESTS_PER_IP` options are still respected
+when AutoThrottle extension is enabled. This means that if
+``AUTOTHROTTLE_TARGET_CONCURRENCY`` is set to a value higher than
+:setting:`CONCURRENT_REQUESTS_PER_DOMAIN` or
+:setting:`CONCURRENT_REQUESTS_PER_IP`, the crawler won't reach this number
+of concurrent requests.
+
+At every given time point Scrapy can be sending more or less concurrent
+requests than ``AUTOTHROTTLE_TARGET_CONCURRENCY``; it is a suggested
+value the crawler tries to approach, not a hard limit.
+
+.. setting:: AUTOTHROTTLE_DEBUG
+
+AUTOTHROTTLE_DEBUG
+~~~~~~~~~~~~~~~~~~
+
+Default: ``False``
+
+Enable AutoThrottle debug mode which will display stats on every response
+received, so you can see how the throttling parameters are being adjusted in
+real time.
+
+
+--- END OF autothrottle_自动限速扩展.txt ---
+
+.. _topics-jobs:
+
+=================================
+Jobs: pausing and resuming crawls
+=================================
+
+Sometimes, for big sites, it's desirable to pause crawls and be able to resume
+them later.
+
+Scrapy supports this functionality out of the box by providing the following
+facilities:
+
+* a scheduler that persists scheduled requests on disk
+
+* a duplicates filter that persists visited requests on disk
+
+* an extension that keeps some spider state (key/value pairs) persistent
+  between batches
+
+Job directory
+=============
+
+To enable persistence support you just need to define a *job directory* through
+the ``JOBDIR`` setting. This directory will be for storing all required data to
+keep the state of a single job (i.e. a spider run).  It's important to note that
+this directory must not be shared by different spiders, or even different
+jobs/runs of the same spider, as it's meant to be used for storing the state of
+a *single* job.
+
+How to use it
+=============
+
+To start a spider with persistence support enabled, run it like this::
+
+    scrapy crawl somespider -s JOBDIR=crawls/somespider-1
+
+Then, you can stop the spider safely at any time (by pressing Ctrl-C or sending
+a signal), and resume it later by issuing the same command::
+
+    scrapy crawl somespider -s JOBDIR=crawls/somespider-1
+
+.. _topics-keeping-persistent-state-between-batches:
+
+Keeping persistent state between batches
+========================================
+
+Sometimes you'll want to keep some persistent spider state between pause/resume
+batches. You can use the ``spider.state`` attribute for that, which should be a
+dict. There's :ref:`a built-in extension <topics-extensions-ref-spiderstate>`
+that takes care of serializing, storing and loading that attribute from the job
+directory, when the spider starts and stops.
+
+Here's an example of a callback that uses the spider state (other spider code
+is omitted for brevity):
+
+.. code-block:: python
+
+    def parse_item(self, response):
+        # parse item here
+        self.state["items_count"] = self.state.get("items_count", 0) + 1
+
+Persistence gotchas
+===================
+
+There are a few things to keep in mind if you want to be able to use the Scrapy
+persistence support:
+
+Cookies expiration
+------------------
+
+Cookies may expire. So, if you don't resume your spider quickly the requests
+scheduled may no longer work. This won't be an issue if your spider doesn't rely
+on cookies.
+
+
+.. _request-serialization:
+
+Request serialization
+---------------------
+
+For persistence to work, :class:`~scrapy.Request` objects must be
+serializable with :mod:`pickle`, except for the ``callback`` and ``errback``
+values passed to their ``__init__`` method, which must be methods of the
+running :class:`~scrapy.Spider` class.
+
+If you wish to log the requests that couldn't be serialized, you can set the
+:setting:`SCHEDULER_DEBUG` setting to ``True`` in the project's settings page.
+It is ``False`` by default.
+
+
+--- END OF jobs_暂停和恢复爬取.txt ---
+
+.. _topics-coroutines:
+
+==========
+Coroutines
+==========
+
+.. versionadded:: 2.0
+
+Scrapy :ref:`supports <coroutine-support>` the :ref:`coroutine syntax <async>`
+(i.e. ``async def``).
+
+
+.. _coroutine-support:
+
+Supported callables
+===================
+
+The following callables may be defined as coroutines using ``async def``, and
+hence use coroutine syntax (e.g. ``await``, ``async for``, ``async with``):
+
+-   The :meth:`~scrapy.spiders.Spider.start` spider method, which *must* be
+    defined as an :term:`asynchronous generator`.
+
+    .. versionadded:: 2.13
+
+-   :class:`~scrapy.Request` callbacks.
+
+    If you are using any custom or third-party :ref:`spider middleware
+    <topics-spider-middleware>`, see :ref:`sync-async-spider-middleware`.
+
+    .. versionchanged:: 2.7
+       Output of async callbacks is now processed asynchronously instead of
+       collecting all of it first.
+
+-   The :meth:`process_item` method of
+    :ref:`item pipelines <topics-item-pipeline>`.
+
+-   The
+    :meth:`~scrapy.downloadermiddlewares.DownloaderMiddleware.process_request`,
+    :meth:`~scrapy.downloadermiddlewares.DownloaderMiddleware.process_response`,
+    and
+    :meth:`~scrapy.downloadermiddlewares.DownloaderMiddleware.process_exception`
+    methods of
+    :ref:`downloader middlewares <topics-downloader-middleware-custom>`.
+
+-   The
+    :meth:`~scrapy.spidermiddlewares.SpiderMiddleware.process_spider_output`
+    method of :ref:`spider middlewares <topics-spider-middleware>`.
+
+    If defined as a coroutine, it must be an :term:`asynchronous generator`.
+    The input ``result`` parameter is an :term:`asynchronous iterable`.
+
+    See also :ref:`sync-async-spider-middleware` and
+    :ref:`universal-spider-middleware`.
+
+    .. versionadded:: 2.7
+
+-   The :meth:`~scrapy.spidermiddlewares.SpiderMiddleware.process_start` method
+    of :ref:`spider middlewares <custom-spider-middleware>`, which *must* be
+    defined as an :term:`asynchronous generator`.
+
+    .. versionadded:: 2.13
+
+-   :ref:`Signal handlers that support deferreds <signal-deferred>`.
+
+
+.. _coroutine-deferred-apis:
+
+Using Deferred-based APIs
+=========================
+
+In addition to native coroutine APIs Scrapy has some APIs that return a
+:class:`~twisted.internet.defer.Deferred` object or take a user-supplied
+function that returns a :class:`~twisted.internet.defer.Deferred` object. These
+APIs are also asynchronous but don't yet support native ``async def`` syntax.
+In the future we plan to add support for the ``async def`` syntax to these APIs
+or replace them with other APIs where changing the existing ones is
+possible.
+
+The following Scrapy methods return :class:`~twisted.internet.defer.Deferred`
+objects (this list is not complete as it only includes methods that we think
+may be useful for user code):
+
+-   :class:`scrapy.crawler.Crawler`:
+
+    - :meth:`~scrapy.crawler.Crawler.crawl`
+
+    - :meth:`~scrapy.crawler.Crawler.stop`
+
+-   :class:`scrapy.crawler.CrawlerRunner` (also inherited by
+    :class:`scrapy.crawler.CrawlerProcess`):
+
+    - :meth:`~scrapy.crawler.CrawlerRunner.crawl`
+
+    - :meth:`~scrapy.crawler.CrawlerRunner.stop`
+
+    - :meth:`~scrapy.crawler.CrawlerRunner.join`
+
+-   :class:`scrapy.core.engine.ExecutionEngine`:
+
+    - :meth:`~scrapy.core.engine.ExecutionEngine.download`
+
+-   :class:`scrapy.signalmanager.SignalManager`:
+
+    - :meth:`~scrapy.signalmanager.SignalManager.send_catch_log_deferred`
+
+-   :class:`~scrapy.mail.MailSender`
+
+    - :meth:`~scrapy.mail.MailSender.send`
+
+The following user-supplied methods can return
+:class:`~twisted.internet.defer.Deferred` objects (the methods that can also
+return coroutines are listed in :ref:`coroutine-support`):
+
+-   Custom download handlers (see :setting:`DOWNLOAD_HANDLERS`):
+
+    - ``download_request()``
+
+    - ``close()``
+
+-   Custom downloader implementations (see :setting:`DOWNLOADER`):
+
+    - ``fetch()``
+
+-   Custom scheduler implementations (see :setting:`SCHEDULER`):
+
+    - :meth:`~scrapy.core.scheduler.BaseScheduler.open`
+
+    - :meth:`~scrapy.core.scheduler.BaseScheduler.close`
+
+-   Custom dupefilters (see :setting:`DUPEFILTER_CLASS`):
+
+    - ``open()``
+
+    - ``close()``
+
+-   Custom feed storages (see :setting:`FEED_STORAGES`):
+
+    - ``store()``
+
+-   Subclasses of :class:`scrapy.pipelines.media.MediaPipeline`:
+
+    - ``media_to_download()``
+
+    - ``item_completed()``
+
+-   Custom storages used by subclasses of
+    :class:`scrapy.pipelines.files.FilesPipeline`:
+
+    - ``persist_file()``
+
+    - ``stat_file()``
+
+In most cases you can use these APIs in code that otherwise uses coroutines, by
+wrapping a :class:`~twisted.internet.defer.Deferred` object into a
+:class:`~asyncio.Future` object or vice versa. See :ref:`asyncio-await-dfd` for
+more information about this.
+
+For example:
+
+-   The :meth:`ExecutionEngine.download()
+    <scrapy.core.engine.ExecutionEngine.download>` method returns a
+    :class:`~twisted.internet.defer.Deferred` object that fires with the
+    downloaded response. You can use this object directly in Deferred-based
+    code or convert it into a :class:`~asyncio.Future` object with
+    :func:`~scrapy.utils.defer.maybe_deferred_to_future`.
+-   A custom download handler needs to define a ``download_request()`` method
+    that returns a :class:`~twisted.internet.defer.Deferred` object. You can
+    write a method that works with Deferreds and returns one directly, or you
+    can write a coroutine and convert it into a function that returns a
+    Deferred with :func:`~scrapy.utils.defer.deferred_f_from_coro_f`.
+
+
+General usage
+=============
+
+There are several use cases for coroutines in Scrapy.
+
+Code that would return Deferreds when written for previous Scrapy versions,
+such as downloader middlewares and signal handlers, can be rewritten to be
+shorter and cleaner:
+
+.. code-block:: python
+
+    from itemadapter import ItemAdapter
+
+
+    class DbPipeline:
+        def _update_item(self, data, item):
+            adapter = ItemAdapter(item)
+            adapter["field"] = data
+            return item
+
+        def process_item(self, item, spider):
+            adapter = ItemAdapter(item)
+            dfd = db.get_some_data(adapter["id"])
+            dfd.addCallback(self._update_item, item)
+            return dfd
+
+becomes:
+
+.. code-block:: python
+
+    from itemadapter import ItemAdapter
+
+
+    class DbPipeline:
+        async def process_item(self, item, spider):
+            adapter = ItemAdapter(item)
+            adapter["field"] = await db.get_some_data(adapter["id"])
+            return item
+
+Coroutines may be used to call asynchronous code. This includes other
+coroutines, functions that return Deferreds and functions that return
+:term:`awaitable objects <awaitable>` such as :class:`~asyncio.Future`.
+This means you can use many useful Python libraries providing such code:
+
+.. skip: next
+.. code-block:: python
+
+    class MySpiderDeferred(Spider):
+        # ...
+        async def parse(self, response):
+            additional_response = await treq.get("https://additional.url")
+            additional_data = await treq.content(additional_response)
+            # ... use response and additional_data to yield items and requests
+
+
+    class MySpiderAsyncio(Spider):
+        # ...
+        async def parse(self, response):
+            async with aiohttp.ClientSession() as session:
+                async with session.get("https://additional.url") as additional_response:
+                    additional_data = await additional_response.text()
+            # ... use response and additional_data to yield items and requests
+
+.. note:: Many libraries that use coroutines, such as `aio-libs`_, require the
+          :mod:`asyncio` loop and to use them you need to
+          :doc:`enable asyncio support in Scrapy<asyncio>`.
+
+.. note:: If you want to ``await`` on Deferreds while using the asyncio reactor,
+          you need to :ref:`wrap them<asyncio-await-dfd>`.
+
+Common use cases for asynchronous code include:
+
+* requesting data from websites, databases and other services (in
+  :meth:`~scrapy.spiders.Spider.start`, callbacks, pipelines and
+  middlewares);
+* storing data in databases (in pipelines and middlewares);
+* delaying the spider initialization until some external event (in the
+  :signal:`spider_opened` handler);
+* calling asynchronous Scrapy methods like :meth:`ExecutionEngine.download`
+  (see :ref:`the screenshot pipeline example<ScreenshotPipeline>`).
+
+.. _aio-libs: https://github.com/aio-libs
+
+
+.. _inline-requests:
+
+Inline requests
+===============
+
+The spider below shows how to send a request and await its response all from
+within a spider callback:
+
+.. code-block:: python
+
+    from scrapy import Spider, Request
+    from scrapy.utils.defer import maybe_deferred_to_future
+
+
+    class SingleRequestSpider(Spider):
+        name = "single"
+        start_urls = ["https://example.org/product"]
+
+        async def parse(self, response, **kwargs):
+            additional_request = Request("https://example.org/price")
+            deferred = self.crawler.engine.download(additional_request)
+            additional_response = await maybe_deferred_to_future(deferred)
+            yield {
+                "h1": response.css("h1").get(),
+                "price": additional_response.css("#price").get(),
+            }
+
+You can also send multiple requests in parallel:
+
+.. code-block:: python
+
+    from scrapy import Spider, Request
+    from scrapy.utils.defer import maybe_deferred_to_future
+    from twisted.internet.defer import DeferredList
+
+
+    class MultipleRequestsSpider(Spider):
+        name = "multiple"
+        start_urls = ["https://example.com/product"]
+
+        async def parse(self, response, **kwargs):
+            additional_requests = [
+                Request("https://example.com/price"),
+                Request("https://example.com/color"),
+            ]
+            deferreds = []
+            for r in additional_requests:
+                deferred = self.crawler.engine.download(r)
+                deferreds.append(deferred)
+            responses = await maybe_deferred_to_future(DeferredList(deferreds))
+            yield {
+                "h1": response.css("h1::text").get(),
+                "price": responses[0][1].css(".price::text").get(),
+                "price2": responses[1][1].css(".color::text").get(),
+            }
+
+
+.. _sync-async-spider-middleware:
+
+Mixing synchronous and asynchronous spider middlewares
+======================================================
+
+.. versionadded:: 2.7
+
+The output of a :class:`~scrapy.Request` callback is passed as the ``result``
+parameter to the
+:meth:`~scrapy.spidermiddlewares.SpiderMiddleware.process_spider_output` method
+of the first :ref:`spider middleware <topics-spider-middleware>` from the
+:ref:`list of active spider middlewares <topics-spider-middleware-setting>`.
+Then the output of that ``process_spider_output`` method is passed to the
+``process_spider_output`` method of the next spider middleware, and so on for
+every active spider middleware.
+
+Scrapy supports mixing :ref:`coroutine methods <async>` and synchronous methods
+in this chain of calls.
+
+However, if any of the ``process_spider_output`` methods is defined as a
+synchronous method, and the previous ``Request`` callback or
+``process_spider_output`` method is a coroutine, there are some drawbacks to
+the asynchronous-to-synchronous conversion that Scrapy does so that the
+synchronous ``process_spider_output`` method gets a synchronous iterable as its
+``result`` parameter:
+
+-   The whole output of the previous ``Request`` callback or
+    ``process_spider_output`` method is awaited at this point.
+
+-   If an exception raises while awaiting the output of the previous
+    ``Request`` callback or ``process_spider_output`` method, none of that
+    output will be processed.
+
+    This contrasts with the regular behavior, where all items yielded before
+    an exception raises are processed.
+
+Asynchronous-to-synchronous conversions are supported for backward
+compatibility, but they are deprecated and will stop working in a future
+version of Scrapy.
+
+To avoid asynchronous-to-synchronous conversions, when defining ``Request``
+callbacks as coroutine methods or when using spider middlewares whose
+``process_spider_output`` method is an :term:`asynchronous generator`, all
+active spider middlewares must either have their ``process_spider_output``
+method defined as an asynchronous generator or :ref:`define a
+process_spider_output_async method <universal-spider-middleware>`.
+
+.. _sync-async-spider-middleware-users:
+
+For middleware users
+--------------------
+
+If you have asynchronous callbacks or use asynchronous-only spider middlewares
+you should make sure the asynchronous-to-synchronous conversions
+:ref:`described above <sync-async-spider-middleware>` don't happen. To do this,
+make sure all spider middlewares you use support asynchronous spider output.
+Even if you don't have asynchronous callbacks and don't use asynchronous-only
+spider middlewares in your project, it's still a good idea to make sure all
+middlewares you use support asynchronous spider output, so that it will be easy
+to start using asynchronous callbacks in the future. Because of this, Scrapy
+logs a warning when it detects a synchronous-only spider middleware.
+
+If you want to update middlewares you wrote, see the :ref:`following section
+<sync-async-spider-middleware-authors>`. If you have 3rd-party middlewares that
+aren't yet updated by their authors, you can :ref:`subclass <tut-inheritance>`
+them to make them :ref:`universal <universal-spider-middleware>` and use the
+subclasses in your projects.
+
+.. _sync-async-spider-middleware-authors:
+
+For middleware authors
+----------------------
+
+If you have a spider middleware that defines a synchronous
+``process_spider_output`` method, you should update it to support asynchronous
+spider output for :ref:`better compatibility <sync-async-spider-middleware>`,
+even if you don't yet use it with asynchronous callbacks, especially if you
+publish this middleware for other people to use. You have two options for this:
+
+1. Make the middleware asynchronous, by making the ``process_spider_output``
+   method an :term:`asynchronous generator`.
+2. Make the middleware universal, as described in the :ref:`next section
+   <universal-spider-middleware>`.
+
+If your middleware won't be used in projects with synchronous-only middlewares,
+e.g. because it's an internal middleware and you know that all other
+middlewares in your projects are already updated, it's safe to choose the first
+option. Otherwise, it's better to choose the second option.
+
+.. _universal-spider-middleware:
+
+Universal spider middlewares
+----------------------------
+
+.. versionadded:: 2.7
+
+To allow writing a spider middleware that supports asynchronous execution of
+its ``process_spider_output`` method in Scrapy 2.7 and later (avoiding
+:ref:`asynchronous-to-synchronous conversions <sync-async-spider-middleware>`)
+while maintaining support for older Scrapy versions, you may define
+``process_spider_output`` as a synchronous method and define an
+:term:`asynchronous generator` version of that method with an alternative name:
+``process_spider_output_async``.
+
+For example:
+
+.. code-block:: python
+
+    class UniversalSpiderMiddleware:
+        def process_spider_output(self, response, result, spider):
+            for r in result:
+                # ... do something with r
+                yield r
+
+        async def process_spider_output_async(self, response, result, spider):
+            async for r in result:
+                # ... do something with r
+                yield r
+
+.. note:: This is an interim measure to allow, for a time, to write code that
+          works in Scrapy 2.7 and later without requiring
+          asynchronous-to-synchronous conversions, and works in earlier Scrapy
+          versions as well.
+
+          In some future version of Scrapy, however, this feature will be
+          deprecated and, eventually, in a later version of Scrapy, this
+          feature will be removed, and all spider middlewares will be expected
+          to define their ``process_spider_output`` method as an asynchronous
+          generator.
+
+Since 2.13.0, Scrapy provides a base class,
+:class:`~scrapy.spidermiddlewares.base.BaseSpiderMiddleware`, which implements
+the ``process_spider_output()`` and ``process_spider_output_async()`` methods,
+so instead of duplicating the processing code you can override the
+``get_processed_request()`` and/or the ``get_processed_item()`` method.
+
+
+--- END OF coroutines_协程.txt ---
+
