@@ -1,9 +1,9 @@
-# file: downloader_optimized.py
 import os
 import re
 import io
 import time
 import threading
+import queue
 from concurrent.futures import ThreadPoolExecutor
 import pandas as pd
 from PIL import Image
@@ -12,79 +12,52 @@ from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
-from selenium.common.exceptions import WebDriverException, NoSuchElementException
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import (
+    WebDriverException, TimeoutException, NoSuchElementException
+)
 import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+# ---------- 全局控制 ----------
 lock = threading.Lock()
 current = 0
 total = 0
-driver_pool = threading.local()  # 每线程独立 driver
+driver_pool = threading.local()  # 每线程独立driver
+screenshot_queue = queue.Queue()  # 请求失败任务队列
 
+
+# ---------- 基础函数 ----------
 def sanitize_filename(s: str) -> str:
-    """
-    清洗文件名：
-    - 保留中英文、数字、下划线、连字符、点号
-    - 替换连续空格为单个'-'
-    - 去除首尾空格与点号
-    - 适配中文及含扩展名的文件
-    """
-    if not s:
-        return "untitled"
+    return re.sub(r'[^\w\s\u4e00-\u9fff-.]', '', str(s)).strip().replace(' ', '-')
 
-    s = str(s).strip()
-
-    # 替换空白为短横线
-    s = re.sub(r'\s+', '-', s)
-
-    # 保留中文、英文、数字、下划线、连字符、点号
-    s = re.sub(r'[^\w\u4e00-\u9fff\-.]', '', s)
-
-    # 移除首尾的点或连字符（防止 Windows 文件名异常）
-    s = s.strip("-. ")
-
-    # 防止空文件名
-    if not s:
-        s = "untitled"
-
-    return s
 
 def is_direct_download(url: str) -> bool:
     return url.lower().endswith((".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"))
 
-def try_download_with_requests(url: str) -> bytes | None:
-    """禁用所有认证机制，仅尝试2秒连接"""
+
+# ---------- 下载函数 ----------
+def try_download_with_requests(url: str, retries: int = 2) -> bytes | None:
+    """requests 下载函数，自动重试"""
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                       "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
     }
-    try:
-        resp = requests.get(url, headers=headers, timeout=2, verify=False)
-        if resp.status_code == 200:
-            return resp.content
-        return None
-    except requests.RequestException:
-        return None
+    for _ in range(retries):
+        try:
+            resp = requests.get(url, headers=headers, timeout=(2, 5), verify=False)
+            if resp.status_code == 200:
+                return resp.content
+        except requests.RequestException:
+            time.sleep(0.2)
+    return None
 
-# def get_selenium_driver() -> webdriver.Chrome:
-#     """线程复用driver实例"""
-#     if hasattr(driver_pool, "driver") and driver_pool.driver:
-#         return driver_pool.driver
-#     chrome_driver_path = r"C:\Program Files\Google\chromedriver-win32\chromedriver.exe"
-#     opts = Options()
-#     opts.add_argument("--headless=new")
-#     opts.add_argument("--disable-gpu")
-#     opts.add_argument("--no-sandbox")
-#     opts.add_argument("--disable-dev-shm-usage")
-#     opts.add_argument("--disable-notifications")
-#     opts.add_experimental_option('excludeSwitches', ['enable-logging'])
-#     driver_pool.driver = webdriver.Chrome(service=Service(chrome_driver_path), options=opts)
-#     driver_pool.driver.set_page_load_timeout(30)
-#     return driver_pool.driver
 
+# ---------- Selenium 驱动 ----------
 def get_selenium_driver() -> webdriver.Chrome:
-    """线程复用 driver 实例（优化资源占用）"""
+    """线程独立 driver"""
     if hasattr(driver_pool, "driver") and driver_pool.driver:
         return driver_pool.driver
 
@@ -95,40 +68,44 @@ def get_selenium_driver() -> webdriver.Chrome:
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-dev-shm-usage")
     opts.add_argument("--disable-notifications")
-    opts.add_argument("--disable-extensions")
-    opts.add_argument("--disable-popup-blocking")
-    opts.add_argument("--blink-settings=imagesEnabled=true")  # ✅ 保留图片加载
-    opts.add_experimental_option("prefs", {
-        "profile.managed_default_content_settings.stylesheets": 2,  # 禁用 CSS
-        "profile.managed_default_content_settings.cookies": 2,       # 禁用 cookies
-        "profile.managed_default_content_settings.plugins": 2,       # 禁用插件
-        "profile.managed_default_content_settings.popups": 2,        # 禁用弹窗
-        "profile.managed_default_content_settings.geolocation": 2,   # 禁用定位
-        "profile.managed_default_content_settings.notifications": 2, # 禁用通知
-    })
+    opts.add_argument("--window-size=1920,1080")
     opts.add_experimental_option('excludeSwitches', ['enable-logging'])
-
     driver_pool.driver = webdriver.Chrome(service=Service(chrome_driver_path), options=opts)
     driver_pool.driver.set_page_load_timeout(30)
     return driver_pool.driver
 
+
+# ---------- Selenium 截图函数 ----------
 def selenium_capture_image(url: str, save_path: str) -> bool:
-    """直接用Selenium截图保存PNG"""
+    """截图方式保存大图，等待加载完成"""
     try:
         driver = get_selenium_driver()
         driver.get(url)
-        time.sleep(2)
+
+        WebDriverWait(driver, 15).until(
+            EC.presence_of_element_located((By.TAG_NAME, "img"))
+        )
         img = driver.find_element(By.TAG_NAME, "img")
-        width = driver.execute_script("return arguments[0].naturalWidth", img)
-        height = driver.execute_script("return arguments[0].naturalHeight", img)
-        driver.set_window_size(width + 50, height + 50)
-        time.sleep(1)
+
+        # 等待 naturalWidth > 300 才截图（大图加载完成）
+        for _ in range(10):
+            width = driver.execute_script("return arguments[0].naturalWidth", img)
+            if width > 300:
+                break
+            time.sleep(0.5)
+
+        driver.execute_script("arguments[0].scrollIntoView(true);", img)
+        time.sleep(0.5)
+
         img_data = img.screenshot_as_png
         Image.open(io.BytesIO(img_data)).save(save_path, "PNG")
         return True
-    except (NoSuchElementException, WebDriverException):
+    except Exception as e:
+        print(f"[截图失败] {url} -> {e}")
         return False
 
+
+# ---------- 状态记录 ----------
 def record_status(status_csv_path, url, tag, name, status, msg, path=""):
     global current
     with lock:
@@ -144,68 +121,60 @@ def record_status(status_csv_path, url, tag, name, status, msg, path=""):
         }]).to_csv(status_csv_path, mode='a', index=False,
                    header=not os.path.exists(status_csv_path), encoding='utf-8-sig')
 
-def download_image(args):
-    url, row, base_path, tag, status_csv = args
 
-    # 获取原始文件名并清洗非法字符（保留点号）
+# ---------- Request 下载线程 ----------
+def request_worker(args):
+    """主下载线程：只做requests下载，失败则丢到队列"""
+    url, row, base_path, tag, status_csv = args
     raw_name = str(row.get('ImageName', 'image')).strip()
     name = sanitize_filename(raw_name)
-
-    # 合法扩展名列表
     valid_exts = [".jpg", ".jpeg", ".png", ".bmp", ".webp"]
-
-    # 拆分 name 和扩展名
     name_root, name_ext = os.path.splitext(name)
 
-    # 1️⃣ 优先：如果 name 自带合法后缀，则使用它（不再额外拼接）
-    if name_ext.lower() in valid_exts:
-        ext = name_ext.lower()
-        clean_name = name_root  # 去除扩展部分备用
-        final_name = f"{clean_name}{ext}"  # 保持原样
-    else:
-        # 2️⃣ 否则尝试从 URL 提取后缀
-        url_ext = os.path.splitext(url.split("?")[0])[1].lower()
-        ext = url_ext if url_ext in valid_exts else ".png"
-        final_name = f"{name_root}{ext}"
-
-    # 避免双重后缀（例如 "xx.jpg.jpg"）
-    # 这里用正则保证末尾只保留一个合法扩展
-    for vext in valid_exts:
-        if re.search(f"{re.escape(vext)}{re.escape(vext)}$", final_name, re.IGNORECASE):
-            final_name = re.sub(f"{re.escape(vext)}{re.escape(vext)}$", vext, final_name, flags=re.IGNORECASE)
-
-    # 保存路径
+    ext = name_ext.lower() if name_ext.lower() in valid_exts else ".png"
     folder = os.path.join(base_path, sanitize_filename(tag))
     os.makedirs(folder, exist_ok=True)
-    full_path = os.path.join(folder, final_name)
+    full_path = os.path.join(folder, f"{name_root}{ext}")
 
-    # 下载逻辑
-    content = try_download_with_requests(url) if is_direct_download(url) else None
-    if content:
-        try:
+    try:
+        content = try_download_with_requests(url) if is_direct_download(url) else None
+        if content:
             Image.open(io.BytesIO(content)).save(full_path)
-            record_status(status_csv, url, tag, final_name, "✅成功", "", full_path)
-            return True
-        except Exception as e:
-            record_status(status_csv, url, tag, final_name, "❌失败", f"保存错误: {e}")
-            return False
-    else:
+            record_status(status_csv, url, tag, name, "✅成功", "", full_path)
+        else:
+            screenshot_queue.put((url, tag, name, full_path, status_csv))
+    except Exception as e:
+        print(f"[requests异常] {url} -> {e}")
+        screenshot_queue.put((url, tag, name, full_path, status_csv))
+
+
+# ---------- Selenium 截图消费者 ----------
+def screenshot_worker():
+    """后台截图线程"""
+    while True:
+        try:
+            url, tag, name, full_path, status_csv = screenshot_queue.get(timeout=10)
+        except queue.Empty:
+            break
+
         ok = selenium_capture_image(url, full_path)
-        record_status(status_csv, url, tag, final_name,
-                      "✅成功" if ok else "❌失败",
-                      "" if ok else "截图失败",
-                      full_path if ok else "")
-        return ok
+        record_status(
+            status_csv, url, tag, name,
+            "✅成功" if ok else "❌失败",
+            "" if ok else "截图失败",
+            full_path if ok else ""
+        )
+        screenshot_queue.task_done()
 
 
+# ---------- 主程序入口 ----------
 if __name__ == "__main__":
-   
-    default_path = r"\\10.58.134.120\aigc2\01_数据\爬虫数据\photos\images"  # 默认路径
-    download_path = input(f"下载路径(请按Enter确认{default_path}): ").strip() or default_path
+    default_path = r"\\10.58.134.120\aigc2\01_数据\爬虫数据\pinterest\images"
+    download_path = input(f"下载路径(回车默认): {default_path}").strip() or default_path
     os.makedirs(download_path, exist_ok=True)
 
-    csv_path = r"D:\work\爬虫\爬虫数据\photos\建筑_records.csv"  # 待下载列表
-    status_csv_path = os.path.join(download_path, "download_建筑.csv")  # 记录下载状态
+    csv_path = r"D:\work\爬虫\爬虫数据\pinterest\all_records_pinterest.csv"
+    status_csv_path = os.path.join(download_path, "download_status_async.csv")
 
     df = pd.read_csv(csv_path)
     downloaded = set()
@@ -221,7 +190,15 @@ if __name__ == "__main__":
     total = len(tasks)
     print(f"待下载: {total} 个")
 
-    with ThreadPoolExecutor(max_workers=5) as ex:   # 5 线程同时下载
-        results = ex.map(download_image, tasks)
-    success = sum(1 for r in results if r)
-    print(f"\n完成 ✅: {success}/{total}")
+    # 启动后台截图线程（建议 2-3 个）
+    for _ in range(3):
+        threading.Thread(target=screenshot_worker, daemon=True).start()
+
+    # 高并发requests下载
+    with ThreadPoolExecutor(max_workers=20) as ex:
+        ex.map(request_worker, tasks)
+
+    # 等待截图任务完成
+    screenshot_queue.join()
+
+    print("\n✅ 全部任务完成")
