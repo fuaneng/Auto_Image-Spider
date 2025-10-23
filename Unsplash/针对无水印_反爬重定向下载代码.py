@@ -4,6 +4,7 @@ import time
 import threading
 from concurrent.futures import ThreadPoolExecutor
 import pandas as pd
+import requests 
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
@@ -21,6 +22,7 @@ try:
 except ImportError:
     pass 
 
+# 禁用 urllib3 的不安全请求警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ---------- 全局控制 ----------
@@ -48,12 +50,17 @@ def get_target_folder(tag: str) -> str:
 def get_selenium_driver(target_folder: str) -> webdriver.Chrome:
     """创建新的 WebDriver 实例，并配置下载到 target_folder"""
     opts = Options()
+    
     opts.add_argument("--headless=new") 
+    opts.add_argument('--ignore-certificate-errors')
+    opts.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     opts.add_argument("--disable-gpu")
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-dev-shm-usage")
     opts.add_argument("--window-size=1920,1080")
     opts.add_experimental_option('excludeSwitches', ['enable-logging'])
+    opts.add_experimental_option("excludeSwitches", ["enable-automation"])
+    opts.add_experimental_option('useAutomationExtension', False)
     
     prefs = {
         "download.prompt_for_download": False,  
@@ -65,43 +72,45 @@ def get_selenium_driver(target_folder: str) -> webdriver.Chrome:
 
     return webdriver.Chrome(service=Service(CHROME_DRIVER_PATH), options=opts)
 
-# ---------- 文件等待与查找（增强版）----------
+# ---------- 文件等待与查找（增强版 - 优化打印频率 V2）----------
 def wait_for_download_and_find(target_folder: str) -> str | None:
     """
     等待下载完成，找到下载的文件并返回其默认文件名。
-
-    加入了文件大小稳定性判断，以确保浏览器实例在文件完成写入后再关闭。
-
-    Returns:
-        str | None: 成功则返回文件的完整路径，失败则返回 None。
+    进一步优化了打印频率。
     """
-    
-    # 【取消固定超时，但设置一个非常长的最大等待时间】
-    MAX_WAIT_SECONDS = 300  # 5分钟，如果文件巨大，可以适当增加
-    
+    MAX_WAIT_SECONDS = 300
+    STABILITY_THRESHOLD = 2  # 文件大小稳定的检查次数阈值
+
     start_time = time.time()
     last_known_size = -1
     stabilized_time = 0
-    STABILITY_THRESHOLD = 3 # 文件大小连续 3 秒不变，则认为下载完成
     
-    print(f"[下载管理] 监控目录: {target_folder}")
+    # 控制打印频率增加到 20 秒
+    last_print_time = 0 
+    PRINT_INTERVAL = 20  # 每 20 秒打印一次状态 
 
     while time.time() - start_time < MAX_WAIT_SECONDS:
         
-        # 查找正在下载的临时文件 (*.crdownload)
         temp_files = glob.glob(os.path.join(target_folder, "*.crdownload"))
         
-        # 查找已完成的文件：非临时文件（排除 .crdownload 和 .tmp）
         downloaded_files = [
             f for f in glob.glob(os.path.join(target_folder, "*"))
             if not f.endswith((".crdownload", ".tmp"))
         ]
         
-        # 找到下载开始后最新创建的文件
         recent_downloads = [
             f for f in downloaded_files
-            if os.path.getmtime(f) > start_time - 5 and os.path.getsize(f) > 1000 # 确保文件大小大于 1KB
+            if os.path.getmtime(f) > start_time - 5 and os.path.getsize(f) > 1000 
         ]
+
+        # ----------------------------------------------------
+        should_print = False
+        current_time = time.time()
+        
+        if current_time - last_print_time >= PRINT_INTERVAL or last_known_size == -1:
+            should_print = True
+            last_print_time = current_time
+        # ----------------------------------------------------
 
         if not temp_files and recent_downloads:
             # 1. 发现已完成文件 (crdownload 已消失)
@@ -113,32 +122,99 @@ def wait_for_download_and_find(target_folder: str) -> str | None:
                 stabilized_time += 1
                 if stabilized_time >= STABILITY_THRESHOLD:
                     # 3. 达到稳定性阈值，确认下载完成
-                    print(f"[下载成功] 文件大小稳定 ({current_size} bytes)，确认完成。")
+                    print(f"[Selenium下载成功] 文件大小稳定 ({current_size} bytes)，确认完成。")
                     return latest_file_path
             else:
                 # 4. 文件大小仍在变化，重置计时器
                 last_known_size = current_size
                 stabilized_time = 0
-
-            print(f"[下载管理] 稳定检查中... 大小: {current_size} (已稳定 {stabilized_time}s)")
+                should_print = True # 文件大小变化时立即打印
+            
+            if should_print:
+                # 打印稳定检查信息，只打印 KB 级别大小，避免数字太长
+                print(f"[Selenium下载管理] 稳定检查中... 大小: {current_size/1024:.0f}KB (已稳定 {stabilized_time}s)")
 
         elif temp_files:
             # 仍在下载中
-            print(f"[下载管理] 正在下载中... 已耗时: {int(time.time() - start_time)}s")
-        
-        else:
-            # 既没有 crdownload 也没有已完成文件，可能下载失败或文件太小
-            print(f"[下载管理] 等待下载或完成... 已耗时: {int(time.time() - start_time)}s")
+            if should_print:
+                print(f"[Selenium下载管理] 正在下载中... 已耗时: {int(current_time - start_time)}s")
             
-        time.sleep(1) # 每秒检查一次
+        else:
+            # 既没有 crdownload 也没有已完成文件
+            if should_print:
+                print(f"[Selenium下载管理] 等待下载或完成... 已耗时: {int(current_time - start_time)}s")
+
+        time.sleep(5) # 每 5 秒检查一次
 
     # 5. 超时处理
-    print(f"[下载失败] 达到最大等待时间 ({MAX_WAIT_SECONDS}s)，下载未完成或失败。")
-    # 检查是否有残留的 .tmp 文件，作为失败日志的参考
+    print(f"[Selenium下载失败] 达到最大等待时间 ({MAX_WAIT_SECONDS}s)，下载未完成或失败。")
     tmp_files = glob.glob(os.path.join(target_folder, "*.tmp"))
     if tmp_files:
-         print(f"[下载失败] 发现残留临时文件: {os.path.basename(max(tmp_files, key=os.path.getmtime))}")
+        print(f"[Selenium下载失败] 发现残留临时文件: {os.path.basename(max(tmp_files, key=os.path.getmtime))}")
     return None
+
+# ---------- requests 下载函数 - 【优化：移除进度打印】----------
+def requests_downloader(url: str, target_folder: str, title: str) -> str | None:
+    """
+    使用 requests 库下载文件，适用于静态资源 URL。
+    """
+    
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+        response = requests.get(url, stream=True, timeout=30, headers=headers, verify=False)
+        response.raise_for_status() 
+
+        content_type = response.headers.get('Content-Type', '')
+        url_path = url.split('?')[0] 
+        guessed_extension = '.' + url_path.split('.')[-1] if '.' in url_path.split('/')[-1] else ''
+
+        if 'image/jpeg' in content_type:
+            extension = '.jpg'
+        elif 'image/png' in content_type:
+            extension = '.png'
+        elif 'image/gif' in content_type:
+            extension = '.gif'
+        elif 'image/webp' in content_type:
+            extension = '.webp'
+        elif 'image/heif' in content_type:
+             extension = '.heif'
+        else:
+            extension = guessed_extension if 1 < len(guessed_extension) < 6 else '.jpg' 
+
+        base_name = sanitize_filename(title)
+        final_filename = base_name + extension
+        file_path = os.path.join(target_folder, final_filename)
+        
+        if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
+            print(f"[{current+1}/{total}] [Requests跳过] 文件已存在: {final_filename}")
+            return file_path
+
+        total_size = int(response.headers.get('content-length', 0))
+        chunk_size = 8192 
+        
+        # 【保留】打印一次开始下载信息
+        print(f"[{current+1}/{total}] [Requests开始] {url} (大小: {total_size/1024/1024:.2f}MB)")
+
+        with open(file_path, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=chunk_size):
+                if chunk: 
+                    f.write(chunk)
+        
+        # 【保留】打印成功信息
+        print(f"[Requests成功] 文件: {final_filename}")
+        return file_path
+
+    except requests.exceptions.RequestException as e:
+        # 【保留】打印失败信息
+        print(f"[{current+1}/{total}] [Requests失败] {url} -> 请求错误: {e}")
+        return None
+    except Exception as e:
+        # 【保留】打印异常信息
+        print(f"[{current+1}/{total}] [Requests异常] {url} -> 意外错误: {e}")
+        return None
+
 
 # ---------- 状态记录 ----------
 def record_status(status_csv_path, url, tag, title, status, msg, path=""):
@@ -146,9 +222,9 @@ def record_status(status_csv_path, url, tag, title, status, msg, path=""):
     global current
     with lock:
         current += 1
+        # 【这是主要的任务进度打印，保持不变】
         print(f"[{current}/{total}] {status} {url}")
         
-        # 保存默认的文件名
         saved_filename = os.path.basename(path) if path else ""
         
         pd.DataFrame([{
@@ -156,16 +232,16 @@ def record_status(status_csv_path, url, tag, title, status, msg, path=""):
             "Status": status,
             "Message": msg,
             "下载后的文件名": saved_filename, 
-            "原对应TAG": tag,           
-            "原标题": title,              
+            "原对应TAG": tag,          
+            "原标题": title,           
             "SavedPath": path if status == "✅成功" else ""
         }]).to_csv(status_csv_path, mode='a', index=False,
                    header=not os.path.exists(status_csv_path), encoding='utf-8-sig')
 
 
-# ---------- 线程工作函数 ----------
+# ---------- 线程工作函数（修改：加入requests逻辑）----------
 def selenium_worker(args):
-    """Selenium 实例逐个打开图像 URL，实现自动保存下载"""
+    """根据 URL 类型，选择使用 requests 或 Selenium 进行下载"""
     url, row, base_path, tag, status_csv = args
     
     driver = None
@@ -174,12 +250,33 @@ def selenium_worker(args):
     
     raw_name = str(row.get('ImageName', 'image')).strip()
     title = raw_name 
+    
+    # 1. 获取目标文件夹
+    folder = get_target_folder(tag)
 
+    # 【关键逻辑：判断是否使用 requests 下载】
+    if url.startswith("https://images.unsplash.com/"):
+        
+        # 走 requests 下载路径
+        saved_path = requests_downloader(url, folder, title)
+        ok = saved_path is not None
+        
+        status_msg = "Requests下载完成" if ok else "Requests下载失败"
+        
+        record_status(
+            status_csv, url, tag, title,
+            "✅成功" if ok else "❌失败",
+            status_msg,
+            saved_path if ok else ""
+        )
+        return # requests 路径结束
+        
+    # 2. 如果不匹配，继续使用 Selenium 逻辑
     try:
-        folder = get_target_folder(tag)
+        
         driver = get_selenium_driver(folder)
 
-        print(f"[{current+1}/{total}] [开始下载] {url}")
+        print(f"[{current+1}/{total}] [开始下载(Selenium)] {url}")
         driver.get(url)
         
         # 4. 等待下载完成并找到文件名 (现在使用了文件稳定性判断)
@@ -195,18 +292,13 @@ def selenium_worker(args):
         )
         
     except TimeoutException:
-        print(f"[下载失败] {url} -> 页面加载超时")
         record_status(status_csv, url, tag, title, "❌失败", "页面加载超时")
     except WebDriverException as e:
-        # 常见的错误如：连接丢失、崩溃等
-        print(f"[下载异常] {url} -> WebDriver 错误: {e}")
         record_status(status_csv, url, tag, title, "❌失败", f"WebDriver 错误: {e}")
     except Exception as e:
-        print(f"[下载异常] {url} -> 意外错误: {e}")
         record_status(status_csv, url, tag, title, "❌失败", f"意外错误: {e}")
     finally:
         if driver:
-            # 【关键】文件稳定后，理论上可以立即关闭。这里留一个短暂延迟作为安全缓冲区。
             time.sleep(1) 
             driver.quit()
 
@@ -215,7 +307,7 @@ def selenium_worker(args):
 if __name__ == "__main__":
     
     # --- 请根据你的实际环境修改以下路径 ---
-    default_path = r"\\10.58.134.120\爬虫数据\unsplash\images1"
+    default_path = r"D:\myproject\Code\爬虫\爬虫数据\unsplash\images1"
     download_path = input(f"下载路径(回车默认): {default_path}").strip() or default_path
     
     GLOBAL_DOWNLOAD_PATH = download_path
@@ -223,12 +315,12 @@ if __name__ == "__main__":
     os.makedirs(download_path, exist_ok=True)
     
     if not os.path.exists(CHROME_DRIVER_PATH):
-         print(f"【错误】ChromeDriver 路径不存在: {CHROME_DRIVER_PATH}")
-         print("请修改代码中的 CHROME_DRIVER_PATH 变量！")
-         exit()
+        print(f"【错误】ChromeDriver 路径不存在: {CHROME_DRIVER_PATH}")
+        print("请修改代码中的 CHROME_DRIVER_PATH 变量！")
+        exit()
 
-    csv_path = r"D:\myproject\Code\爬虫\爬虫数据\unsplash\建筑_records.csv"
-    status_csv_path = os.path.join(download_path, "建筑_records.csv")
+    csv_path = r"D:\myproject\Code\爬虫\爬虫数据\unsplash\all_records_unsplash_01.csv"
+    status_csv_path = os.path.join(download_path, "download_all_records_unsplash_01.csv")
     # ------------------------------------
 
     df = pd.read_csv(csv_path)
@@ -238,8 +330,8 @@ if __name__ == "__main__":
         try:
             df_s = pd.read_csv(status_csv_path)
             if '原标题' in df_s.columns and '原对应TAG' in df_s.columns:
-                 df_s['ID'] = df_s['原标题'].astype(str) + "|" + df_s['原对应TAG'].astype(str)
-                 downloaded_ids = set(df_s.loc[df_s["Status"] == "✅成功", "ID"])
+                df_s['ID'] = df_s['原标题'].astype(str) + "|" + df_s['原对应TAG'].astype(str)
+                downloaded_ids = set(df_s.loc[df_s["Status"] == "✅成功", "ID"])
             
         except Exception:
             pass
@@ -256,7 +348,7 @@ if __name__ == "__main__":
     total = len(tasks)
     print(f"待下载: {total} 个")
 
-    MAX_THREADS = 5 
+    MAX_THREADS = 4 # 设置最大线程数,共用线程设置
     
     with ThreadPoolExecutor(max_workers=MAX_THREADS) as ex:
         ex.map(selenium_worker, tasks)
