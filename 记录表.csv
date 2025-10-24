@@ -1,0 +1,43 @@
+﻿����	����	Ŀ����ַ	��ַ����/����	�������ܣ�����	·��
+1	2025/10/24	https://freestocks.org/	�ṩ������������ͼ�⣬֧�ָ��˺���ҵ��;�����Ƕ�����н�����ʱ�С�ʳ���Ȼ����Ʒ�뼼���������ȶ���������	Selenium	Auto_Image-Spider\������վ����_����Selenium
+2	2025/10/24	https://girlydrop.com/	�ձ�Ů��������������Ƭ�ز���վ���ṩ�ɰ���ʱ�С�Ů�Ի�����Ƭ�زģ������ڸ��˺���ҵ��Ŀ��֧�����Ӣ��������ġ��������ĵȶ����ԡ�	Selenium + Network����	Auto_Image-Spider\������վ����_����Selenium
+3	2025/10/24	https://www.lensculture.com/	רע�ڵ�����Ӱ�Ĺ���ƽ̨��չʾ��Ӱ��Ʒ���ɷá���������Ƶ��̸�����ݣ��ٰ���Ӱ������չ�����ṩ��Ӱѧϰ��Դ��	Selenium	Auto_Image-Spider\������վ����_����Selenium
+4	2025/10/24	https://nappy.co/search/	�ṩ�������ĺ��˺���ɫ����������Ƭ��֧���������غ����ã����ݺ��ǽ�ͷ��������д�����ʽ�ȣ�ǿ����Ԫ�Ļ��Ͱ����ԡ�	Selenium + ��¼����֤�봦��	Auto_Image-Spider\������վ����_����Selenium
+5	2025/10/24	https://numero.com.cn/	����ʱ����־��Numero�������İ���վ�����ݺ���ʱ�С���������Ӱ�����Ƶ�������չʾȫ��������Ʒ�����ơ�	Selenium + JSON����	Auto_Image-Spider\������վ����_����Selenium
+6	2025/10/24	https://www.nylon.com/	����ʱ���Ļ���վ����ע�������Ļ���ʱ�С����֡����ʽ�ȣ����ݰ���ʱ�����ơ����ǲɷá�������Ѷ�ȡ�	Selenium + �����ű�	Auto_Image-Spider\������վ����_����Selenium
+7	2025/10/24	https://pixnio.com/	�ṩ�������ѵĸ߷ֱ���ͼƬ�����Ƿ羰����������Ȼ�����еȶ���������֧�ָ��˺���ҵ��;��	Selenium + ��֤��ʶ��	Auto_Image-Spider\������վ����_����Selenium
+8	2025/10/24	https://theinspirationgrid.com/	�㼯ȫ���������е���վ��չʾ���ơ���Ӱ���廭�����桢Ʒ�Ƶ�������������Ʒ���ʺ�����ʦ�ʹ��⹤���߻�ȡ���С�	Selenium	Auto_Image-Spider\������վ����_����Selenium
+9	2025/10/24	https://mystock.themeisle.com/	�ṩ������������ͼƬ�زģ������ڸ��˺���ҵ��Ŀ�����Ƕ�������������ҵ���Ƽ��������������ȡ�	Selenium + ��֡�ű�	Auto_Image-Spider\������վ����_����Selenium
+10	2025/10/24	https://vintagestockphotos.com/	�ṩ���ŷ���������ͼƬ�زģ������ڸ��˺���ҵ��Ŀ��������ʷ�����ɡ����������⡣	Selenium + ��¼����Ա����	Auto_Image-Spider\������վ����_����Selenium
+11	2025/10/24	https://www.wmagazine.com/	����ʱ����־��W Magazine���Ĺٷ���վ�����ݺ���ʱ�С��������Ļ������˵ȣ�չʾȫ��������Ʒ�����ơ�	Selenium	Auto_Image-Spider\������վ����_����Selenium
+12	2025/10/24	https://freenaturestock.com	�ṩ���ѵ���Ȼ�羰��Ƭ�زģ������ڸ��˺���ҵ��Ŀ������ɽ����ɭ�֡���������Ȼ���ۡ�	Requests + Token����	Auto_Image-Spider\Requests\Freenaturestock
+13	2025/10/24	https://freephotos.cc	�ṩ��������������Ƭ�زģ������ڸ��˺���ҵ��Ŀ�����Ƕ������������羰�����С������ȡ�	Requests	Auto_Image-Spider\Requests\Freephotos_cc
+14	2025/10/24	https://libreshot.com/	�ṩ���ѵĸ߷ֱ�����Ƭ�زģ������ڸ��˺���ҵ��Ŀ�����Ƕ�������������Ȼ�����С��Ƽ��ȡ�	Requests	Auto_Image-Spider\Requests\Libreshot
+15	2025/10/24	https://api.morguefile.com	�ṩ���ѵ���Ƭ�ز�API�ӿڣ������ڿ����ߺ�����ʦ��֧���Զ�����ȡ������ͼƬ�زġ�	Requests	Auto_Image-Spider\Requests\MorgueFile
+16	2025/10/24	https://www.typographicposters.com/	�ṩ���ѵ��Ű溣�������زģ������ڸ��˺���ҵ��Ŀ�����Ƕ��ַ��������⡣	Requests	Auto_Image-Spider\Requests\Typographicposters
+17	2025/10/24	https://lifeofpix.com	�ṩ���ѵĸ߷ֱ�����Ƭ�زģ������ڸ��˺���ҵ��Ŀ�����ǳ��С���Ȼ�������ȶ���������	Scraper	Auto_Image-Spider\Scrapy\Lifeofpix
+18	2025/10/24	https://www.splitshire.com/	�ṩ���ѵĸ�������Ƭ�زģ������ڸ��˺���ҵ��Ŀ�����Ƿ羰�����С������ȶ���������	Scraper	Auto_Image-Spider\Scrapy\Splitshire
+19	2025/10/24	https://wallhalla.com	�ṩ���ѵĸ�����ֽ�زģ������ڸ��˺���ҵ��Ŀ�����Ƿ羰�����С������ȶ���������	Scraper	Auto_Image-Spider\Scrapy\Wallhalla
+20	2025/10/24	https://www.artstation.com/	ȫ��֪������������ƽ̨��չʾ�廭��3D��ģ����Ϸ���ơ�������������Ʒ����������չʾ�ͽ�����	Selenium	Auto_Image-Spider\Selenium\Artstation
+21	2025/10/24	https://creativemarket.com/	�ṩ������Դƽ̨���������塢ͼ�Ρ�ģ�塢�廭����Ƭ���زģ�������ʦ�ʹ��⹤����ʹ�á�	Selenium	Auto_Image-Spider\Selenium\Creativemarket
+22	2025/10/24	https://www.duitang.com/	�й��罻ͼƬ����ƽ̨���û������ϴ����������ղ�ͼƬ�����ݺ�����ʳ��ʱ�С��Ҿӡ����εȶ���������	Selenium	Auto_Image-Spider\Selenium\duitang
+23	2025/10/24	https://eiginleiki.net/	�ṩ���ѵĸ�������Ƭ�زģ������ڸ��˺���ҵ��Ŀ��������Ȼ�����С������ȶ���������	Selenium	Auto_Image-Spider\Selenium\Eiginleiki
+24	2025/10/24	https://ffcu.io/	�ṩ���ѵĸ�������Ƭ�زģ������ڸ��˺���ҵ��Ŀ�����Ƕ������������Ƽ�����ҵ�������ȡ�	Selenium	Auto_Image-Spider\Selenium\Ffcu
+25	2025/10/24	https://imgur.com/	ͼƬ�������й�ƽ̨���û������ϴ�������ͼƬ��GIF�����ݺ������֡����š��Ƽ��ȶ���������	Selenium	Auto_Image-Spider\Selenium\imgur
+26	2025/10/24	https://www.metmuseum.org/	�����󶼻����������ݹٷ���վ��չʾȫ��������Ʒ���ṩ����չ��������Ʒ��Ϣ��������Դ�ȡ�	Selenium	Auto_Image-Spider\Selenium\Metmuseum
+27	2025/10/24	https://openclipart.org/	�ṩ���ѵ�ʸ����ͼ�زģ������ڸ��˺���ҵ��Ŀ�����Ƕ��������ͷ�����	Selenium	Auto_Image-Spider\Selenium\Openclipart
+28	2025/10/24	https://za.pinterest.com/	Pinterest���Ϸǵ����汾���û����Է��ֺ��ղش������У����ݺ��ǼҾӡ�ʱ�С���ʳ�����еȶ���������	Selenium	Auto_Image-Spider\Selenium\Pinterest
+29	2025/10/24	https://wallpaperswide.com/	�ṩ���ѵĸ�����ֽ�زģ������ڸ��˺���ҵ��Ŀ�����Ƿ羰�����С������ȶ���������	Selenium	Auto_Image-Spider\Selenium\Wallpaperswide
+30	2025/10/24	https://www.civitai.com/	�ṩAI����������Ʒ��ƽ̨���û����������������ʹ���AI���ɵ�������Ʒ��	Selenium+Cookies	Auto_Image-Spider\Selenium_Cookies
+31	2025/10/24	https://www.unsplash.com	�ṩ���ѵĸ�������Ƭ�زģ������ڸ��˺���ҵ��Ŀ�����Ƕ�������������Ȼ�����С������ȡ�	Requests��Selenium	Auto_Image-Spider\Selenium_Requsets\Unsplash\unsplash_com.png
+32	2025/10/24	https://www.Yande.re	�ձ�����ͼƬ����ƽ̨���û����������ͷ������嶯��ͼƬ�����ݺ��Ƕ�������Ϸ���廭�ȶ���������	Requests��Selenium	Auto_Image-Spider\Selenium_Requsets\Yande.re
+33					
+34					
+					
+					
+					
+					
+					
+					
+					
+					
