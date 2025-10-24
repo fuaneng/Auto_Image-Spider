@@ -1,7 +1,7 @@
 
 # ArtStation 解耦式异步多线程爬虫
 
-本项目基于 Python 和 Selenium，实现了多线程并发爬取 ArtStation 搜索结果页和详情页图片链接的功能。通过将爬虫实例（Selenium 浏览器）与线程解耦，并利用任务队列进行任务分配，大大提高了数据采集效率。
+本项目基于 Python 和 Selenium，实现了多线程并发爬取 'https://www.artstation.com/' 搜索结果页和详情页图片链接的功能。通过将爬虫实例（Selenium 浏览器）与线程解耦，并利用任务队列进行任务分配，大大提高了数据采集效率。
 
 ## 🚀 核心特性
 
