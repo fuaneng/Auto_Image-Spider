@@ -48,7 +48,7 @@ class ElitebabesSpider:
 
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Referer': 'https://www.elitebabes.com/watch-4-beauty/',
+            'Referer': 'https://www.elitebabes.com/watch-4-beauty/',    # 避免 403 错误，如果是模特 /dakota-3/
             'Accept': 'application/json, text/javascript, */*; q=0.01',
             'X-Requested-With': 'XMLHttpRequest'
         }
