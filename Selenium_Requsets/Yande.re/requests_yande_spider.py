@@ -4,7 +4,7 @@ import csv
 import os
 import time
 from lxml import etree
-from queue import Queue
+from queue import Queue, Empty
 from threading import Thread, Lock
 
 # --- 配置和常量 ---
@@ -15,14 +15,14 @@ HEADERS = {
 }
 
 # 文件和目录路径配置
-TAGS_FILE_PATH = r'R:\py\Auto_Image-Spider\Yande.re\ram_tag_24小时.txt'
-CSV_FILE_PATH = r'R:\py\Auto_Image-Spider\Yande.re\all_records_yande_re_24小时.csv'
-DOWNLOAD_DIR = r'R:\py\Auto_Image-Spider\Yande.re\output'
+TAGS_FILE_PATH = r'D:\爬虫4\Yande.re\ram_tag_24小时.txt'
+CSV_FILE_PATH = r'D:\爬虫4\Yande.re\all_records_yande_re_251101.csv'
+DOWNLOAD_DIR = r'D:\爬虫4\Yande.re\251101'
 
 # 线程配置
 TAG_PROCESS_THREADS = 1  # 标签处理线程数
-ENABLE_DOWNLOAD = False  # 是否启用图片下载功能，True为启用，False为禁用
-DOWNLOAD_THREADS = 4    # 图片下载线程数（当启用下载功能时使用）
+ENABLE_DOWNLOAD = True  # 是否启用图片下载功能，True为启用，False为禁用
+DOWNLOAD_THREADS = 20    # 图片下载线程数（当启用下载功能时使用）
 RETRY_COUNT = 3          # 请求失败重试次数
 
 # --- 全局变量和锁 ---
@@ -200,18 +200,17 @@ def process_tag_page(tag, page):
 
 
 # --- 线程类 ---
-
 class TagProcessor(Thread):
     """标签处理线程：负责从tag_queue中取出标签，并爬取其所有页面"""
     def __init__(self, tag_queue):
         super().__init__()
         self.tag_queue = tag_queue
-        self.daemon = True
+        self.daemon = True # 保持 daemon=True，以便主程序退出时它能随之结束
 
     def run(self):
         while True:
             try:
-                # 获取标签
+                # 获取标签 (使用 timeout=1 让线程在队列清空后能自然退出，这在 TagProcessor 中是可接受的)
                 tag = self.tag_queue.get(timeout=1)
                 print(f"[标签处理线程] 开始处理标签: {tag}")
                 
@@ -224,9 +223,10 @@ class TagProcessor(Thread):
                     time.sleep(0.5) # 适当休息，防止请求过快
 
                 print(f"[标签处理线程] 标签 {tag} 处理完成。")
-                self.tag_queue.task_done()
-            except Queue.Empty:
-                break # 队列为空，退出线程
+                self.tag_queue.task_done() # 标记此任务完成
+            except Empty:
+                # 这是正常退出机制，不再是错误
+                break 
             except Exception as e:
                 print(f"[标签处理线程] 发生未知错误: {e}")
                 if 'tag' in locals():
@@ -238,51 +238,55 @@ class ImageDownloader(Thread):
     def __init__(self, download_queue):
         super().__init__()
         self.download_queue = download_queue
-        self.daemon = True
-        # 确保下载目录存在
+        # 移除了 daemon=True，如果希望在主程序结束后等待它完成，最好移除。
+        # 如果保留 daemon=True，你需要确保所有任务被取出并 task_done() 后，主线程才能退出。
+        self.daemon = True 
         os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
     def run(self):
         while True:
             try:
-                # 获取下载任务
-                task = self.download_queue.get(timeout=1)
+                # 使用阻塞式 get()，等待直到有任务或收到哨兵 None
+                task = self.download_queue.get() 
+                
+                # 检查哨兵值 (None)
+                if task is None:
+                    self.download_queue.task_done() # 标记哨兵任务完成
+                    print(f"[{self.name}] 收到退出信号，安全退出。")
+                    break # 安全退出线程
+                    
                 url = task['url']
                 name = task['name']
                 save_path = os.path.join(DOWNLOAD_DIR, name)
                 
+                # ... (下载逻辑不变)
                 if os.path.exists(save_path):
-                    print(f"[下载线程] 文件已存在，跳过: {name}")
+                    print(f"[{self.name}] 文件已存在，跳过: {name}")
                     self.download_queue.task_done()
                     continue
 
-                print(f"[下载线程] 正在下载: {name} from {url}")
+                print(f"[{self.name}] 正在下载: {name} from {url}")
 
                 response = safe_request(url, stream=True)
                 if response:
-                    # 分块写入，防止大图占用过多内存
                     with open(save_path, 'wb') as f:
                         for chunk in response.iter_content(chunk_size=8192):
                             f.write(chunk)
-                    print(f"[下载线程] 下载成功: {name}")
+                    print(f"[{self.name}] 下载成功: {name}")
                 else:
-                    print(f"[下载线程] 下载失败，跳过: {name}")
+                    print(f"[{self.name}] 下载失败，跳过: {name}")
                     
-                self.download_queue.task_done()
-            except Queue.Empty:
-                break # 队列为空，退出线程
+                self.download_queue.task_done() # 标记此任务完成
             except Exception as e:
-                print(f"[下载线程] 发生未知错误: {e}")
-                if 'task' in locals():
-                    self.download_queue.task_done() # 确保任务完成
+                print(f"[{self.name}] 发生未知错误: {e}")
+                self.download_queue.task_done() # 确保任务被标记完成
 
 
-# --- 主程序 ---
-
+# --- 主程序 (main 函数) ---
 def main():
     print("--- yande.re 爬虫启动 ---")
     
-    # 1. 读取标签文件
+    # 1. 读取标签文件 (不变)
     tags = []
     try:
         with open(TAGS_FILE_PATH, 'r', encoding='utf-8') as f:
@@ -292,11 +296,11 @@ def main():
         print(f"错误: 标签文件未找到，请检查路径: {TAGS_FILE_PATH}")
         return
 
-    # 2. 将标签放入标签队列
+    # 2. 将标签放入标签队列 (不变)
     for tag in tags:
         tag_queue.put(tag)
 
-    # 3. 启动标签处理线程 (标签处理/数据解析/CSV写入)
+    # 3. 启动标签处理线程 (不变)
     tag_processors = []
     for i in range(TAG_PROCESS_THREADS):
         t = TagProcessor(tag_queue)
@@ -304,7 +308,7 @@ def main():
         t.start()
         print(f"启动标签处理线程-{i+1}")
 
-    # 4. 如果启用下载功能，启动图片下载线程
+    # 4. 如果启用下载功能，启动图片下载线程 (不变)
     downloaders = []
     if ENABLE_DOWNLOAD and DOWNLOAD_THREADS > 0:
         for i in range(DOWNLOAD_THREADS):
@@ -320,14 +324,17 @@ def main():
     tag_queue.join()
     print("所有标签页面已处理完毕。")
 
-    # 6. 等待所有图片下载任务完成
-    print("\n等待图片下载线程完成所有下载任务...")
-    download_queue.join()
-    print("所有图片下载任务已完成。")
-
-    # 7. 退出线程
-    # 由于线程设置了daemon=True，主程序退出时它们会自动退出。
-    # 更优雅的做法是使用标志位，但Queue.Empty异常退出也行。
+    # ******* 6. 注入哨兵，等待下载线程完成 *******
+    if ENABLE_DOWNLOAD and DOWNLOAD_THREADS > 0:
+        print(f"发送 {DOWNLOAD_THREADS} 个退出信号给下载线程...")
+        # 向队列中放入与下载线程数相等的 None 哨兵
+        for _ in range(DOWNLOAD_THREADS):
+            download_queue.put(None)
+        
+        # 等待所有图片下载任务完成（包括哨兵任务）
+        print("等待图片下载线程完成所有下载任务...")
+        download_queue.join()
+        print("所有图片下载任务已完成。")
 
     print("\n--- yande.re 爬虫运行结束 ---")
 
