@@ -7,7 +7,7 @@ import time
 
 # ========================== ⚙️ 配置区 ==========================
 # 指定要遍历的根目录
-ROOT_DIR = r"R:\py\Auto_Image-Spider\Selenium_Undetected-chromedriver\tw_8se_me\models\年年"
+ROOT_DIR = r"R:\py\Auto_Image-Spider\Requests\1x_com\images - 副本"
 
 # 转换模式选择：
 # 1. "AVIF_TO_PNG": 批量转换 .avif 文件为 .png 并删除原文件
@@ -24,7 +24,7 @@ MAX_WORKERS = 30  # 最大并发线程数（根据您的CPU核心数或IO速度�
 # WebP 转换参数 (仅当 CONVERSION_MODE 为 WebP 模式时有效)
 QUALITY = 90      # 推荐 75~95：数字越低体积越小但画质下降越明显
 METHOD = 6        # Pillow WEBP 的 method: 0~6，值越大压缩更好但更慢
-LOSSLESS = False  # 是否使用无损 WebP，通常设 False，开启设为 True 时，QUALITY 会被忽略
+LOSSLESS = True  # 是否使用无损 WebP，通常设 False，开启设为 True 时，QUALITY 会被忽略
 PRINT_SUMMARY = True # 是否打印转换摘要
 # =============================================================
 

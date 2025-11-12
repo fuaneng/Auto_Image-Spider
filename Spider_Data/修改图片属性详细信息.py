@@ -7,13 +7,13 @@ import glob
 # =======================================
 # ⚙️ 配置部分 (请根据你的实际路径修改!)
 # =======================================
-EXIFTOOL_PATH = r"R:\py\Auto_Image-Spider\Spider_Data\exiftool-13.41_64\exiftool.exe"
-BASE_PATH = r"R:\py\Auto_Image-Spider\Selenium_Undetected-chromedriver\tw_8se_me\models\年年"
+EXIFTOOL_PATH = r"R:\anzhuangmulu\exiftool-13.41_64\exiftool.exe"
+BASE_PATH = r"R:\py\Auto_Image-Spider\Requests\1x_com\images"
 
 AUTHOR = "fuaneng"
-SOFTWARE = "一刻相册"
+SOFTWARE = "1x.com"
 COPYRIGHT = "fuaneng@163.com"
-USER_COMMENT = "r17+" 
+USER_COMMENT = "r18+" 
 
 BATCH_SIZE = 50 
 IMAGES_PER_DAY = 6 # ⭐ 新增：每 6 张图片增加一天

@@ -233,12 +233,12 @@ def screenshot_worker():
 
 # ---------- 主程序入口 (保持不变) ----------
 if __name__ == "__main__":
-    default_path = r"D:\myproject\Code\爬虫\爬虫数据\pinterest\images"
+    default_path = r"R:\py\Civitai_保存和导入 Cookies\civitai\pic"
     download_path = input(f"下载路径(回车默认): {default_path}").strip() or default_path
     os.makedirs(download_path, exist_ok=True)
 
-    csv_path = r"D:\myproject\Code\爬虫\爬虫数据\pinterest\all_records_pinterest_02.csv"
-    status_csv_path = os.path.join(download_path, "download_all_records_pinterest_02.csv")
+    csv_path = r"R:\py\Civitai_保存和导入 Cookies\civitai\tag_5133.csv"
+    status_csv_path = os.path.join(download_path, "download_tag_5133.csv")
 
     df = pd.read_csv(csv_path)
     downloaded = set()
